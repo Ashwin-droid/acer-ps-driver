@@ -1,0 +1,18 @@
+[package]
+name = "aps"
+version = "0.2.0"
+edition = "2021"
+license = "GPL-2.0-only"
+description = "Controls for Acer Predator PHN16S-71 BIOS V1.28"
+
+[dependencies]
+crossterm = "=0.28.1"
+ratatui = "=0.29.0"
+ratatui-image = { version = "=8.1.1", default-features = false, features = ["crossterm"] }
+image = { version = "=0.25.10", default-features = false, features = ["jpeg", "gif", "png"] }
+libc = "0.2"
+tempfile = "3"
+
+[profile.release]
+lto = true
+strip = true

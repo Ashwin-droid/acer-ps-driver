@@ -1,0 +1,66 @@
+APS native Breathing capture for Predator PHN16S-71
+
+1. Boot Windows and open Windows Terminal or Windows PowerShell AS ADMINISTRATOR.
+   Use 64-bit Windows PowerShell, not PowerShell (x86).
+
+2. Run:
+
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\ash6c\Documents\APS-native-capture\capture-windows-breathing.ps1"
+
+   ExecutionPolicy Bypass applies only to this invocation. No machine execution
+   policy or Secure Boot setting is changed. No driver/tool is installed.
+
+3. Follow the prompts in that window. Open PredatorSense and use KEYBOARD
+   lighting only. Keep brightness and Breathing speed unchanged between trials:
+     - Static blue briefly, then Static RED (#FF0000), as a capture baseline.
+     - Breathing with Random/multicolor ON.
+     - Breathing with Random OFF and RED selected.
+     - Same fixed setting, but BLUE (#0000FF).
+   Watch at least two full breathing cycles. Record what you actually see.
+   If there is no Random toggle or fixed-color selection, say that in the prompt.
+
+What the script does:
+  - Verifies the laptop model and locates the registered Acer lighting service.
+  - Records the actual running module paths, versions, and hashes when readable.
+  - Saves the native lighting INI and lighting-only scenario fields.
+  - Backs up, temporarily enables, and finally restores this one DWORD:
+      HKLM\SOFTWARE\OEM\AcerLightingService\Log\AcerLightingService
+  - Restarts only the Acer lighting service and its exact sibling OpenRGB helper.
+  - Collects NEW Acer log data for each test and your visual observations.
+  - Checks for Static-red and Breathing-red/blue payloads. Mode-argument logs
+    alone are explicitly labeled partial, not a verified raw capture.
+  - Restores the logging value and original running/stopped service state.
+
+It does not send raw firmware commands, capture your typing, read unrelated
+personal files, install anything, alter Secure Boot, or change display settings.
+Your UI lighting choices are NOT automatically rolled back. Restore your
+preferred Windows lighting in PredatorSense at the final prompt if desired.
+
+Results:
+  C:\Users\ash6c\Documents\APS-native-capture\captures\<timestamp>-<id>\
+  A matching ZIP is created beside the session folder.
+  Read SUMMARY.txt and result.json before leaving Windows.
+
+If the script says PARTIAL CAPTURE:
+  Keep every output file. If fixed-color Breathing DOES work in Windows but
+  raw packets are missing, stay in Windows and send the SUMMARY.txt contents
+  here before rebooting. A user-mode HID debugger capture may then be needed.
+  Do not install a USB filter driver or disable Secure Boot: this is I2C HID.
+  If the raw baseline check fails, choose R to retry, C to gather partial
+  evidence, or Q to stop and restore logging. Do not mistake missing logs for
+  proof that Windows sent no command.
+
+Recovery after a forcibly closed terminal / crash:
+  Each session contains RECOVER.txt with an Administrator command using
+  -RestoreOnly -SessionDirectory to restore logging and service state.
+  Normal completion and handled errors run that cleanup automatically.
+
+Afterward:
+  Boot Linux normally. Tell me the test is finished. I can inspect the saved
+  ZIP/folder through /mnt/Ashwin; there is no need to manually upload the whole
+  Windows profile or registry. Do not delete the capture folder.
+
+Local validation performed before handoff:
+  PowerShell syntax parsing and cross-platform unit tests for packet parsing,
+  evidence grading, log encodings/deltas, and mocked registry rollback.
+  The Windows CIM/service/module calls require their first live Windows run.

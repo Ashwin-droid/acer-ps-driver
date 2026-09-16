@@ -1,0 +1,30 @@
+[Unit]
+Description=APS user-account preference restore and save
+After=systemd-modules-load.service systemd-udev-trigger.service
+
+[Service]
+Type=simple
+User=@USER@
+Environment=HOME=@HOME@
+Environment=XDG_STATE_HOME=@STATE@
+ExecStart=/usr/local/libexec/aps-state watch
+ExecStop=/usr/local/libexec/aps-state save-on-stop
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@STATE@/aps -/sys/devices/virtual/misc/acer-phn16s
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

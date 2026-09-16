@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# Use the existing JDK 21 on this machine, scoped to this process.
+if [[ -x /usr/lib/jvm/java-21-openjdk-amd64/bin/javac ]]; then
+    export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+    export PATH="$JAVA_HOME/bin:$PATH"
+fi
+
+exec "$project_dir/tools/ghidra_12.1.3_PUBLIC/support/analyzeHeadless" "$@"

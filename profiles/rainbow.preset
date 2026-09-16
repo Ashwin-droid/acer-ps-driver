@@ -1,0 +1,8 @@
+version=1
+effect=rainbow
+colors=
+brightness=65
+speed=6
+direction=right
+duty=0.5
+duration=30

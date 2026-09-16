@@ -1,0 +1,2 @@
+ACTION=="add", SUBSYSTEM=="misc", KERNEL=="acer-phn16s", RUN+="/usr/libexec/aps-sysfs-permissions"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="APS Turbo Button", ENV{ID_INPUT}="1", ENV{ID_INPUT_KEY}="1", ENV{ID_INPUT_KEYBOARD}="1"

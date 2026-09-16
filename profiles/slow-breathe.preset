@@ -1,0 +1,8 @@
+version=1
+effect=breathing
+colors=
+brightness=60
+speed=2
+direction=right
+duty=0.5
+duration=30

@@ -1,0 +1,8 @@
+version=1
+effect=strobe
+colors=FFFFFF
+brightness=60
+speed=2
+direction=right
+duty=0.5
+duration=15
