@@ -17,7 +17,7 @@ fn byte(args: &[String], index: usize, default: u8, maximum: u8, label: &str) ->
     }
     Ok(value)
 }
-fn parse(args: &[String]) -> Result<Logo> {
+pub(super) fn parse(args: &[String]) -> Result<Logo> {
     let (name, rest) = args
         .split_first()
         .ok_or("Choose a logo command; see aps logo --help")?;

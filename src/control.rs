@@ -125,6 +125,14 @@ pub(crate) fn logo(bytes: &[u8]) -> Option<Logo> {
     (parts.next().is_none() && setting.valid()).then_some(setting)
 }
 
+// Sleep has no operating-mode flashes, software animations, or raw commands.
+pub(crate) fn sleep_logo(bytes: &[u8]) -> Option<Logo> {
+    match logo(bytes)? {
+        Logo::OperatingMode { .. } => None,
+        setting => Some(setting),
+    }
+}
+
 // A stateful command, deliberately NOT a serializable Logo preference.
 pub(crate) fn logo_reapply(bytes: &[u8]) -> bool {
     text(bytes).is_some_and(|value| value.trim() == "reapply")

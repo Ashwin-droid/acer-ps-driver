@@ -9,6 +9,7 @@ mod lighting;
 mod logo;
 mod mux;
 mod protocol;
+mod sleep;
 mod sysfs;
 mod timeout;
 
@@ -193,6 +194,8 @@ aps turbo-led auto|manual [RRGGBB]|RRGGBB|off|status
 aps logo COLOR [brightness] | off | on | status
 aps logo breathing|neon [brightness] [speed]
 aps logo opmode [brightness]
+aps sleep status|off
+aps sleep logo static COLOR [brightness] | breathing|neon [brightness] [speed] | off
 aps gpu mux status
 aps boot status|effects on|off
 aps boot logo pick [DIRECTORY] | set FILE | prepare FILE OUTPUT | status | reset
@@ -220,6 +223,7 @@ fn topic_help(topic: &str) {
         "boot" => boot::help(),
         "gpu" => gpu::help(),
         "logo" => logo::help(),
+        "sleep" => sleep::help(),
         "turbo-led" => println!("Turbo / mode-key RGB LED\n\n  aps turbo-led status\n  aps turbo-led auto\n  aps turbo-led manual FF0088\n  aps turbo-led FF0088\n  aps turbo-led manual\n  aps turbo-led off\n\nAuto follows the operating mode in firmware. A hex color selects Manual.\nManual without a color restores the saved manual color (white without saved state).\nOnly an advertised Turbo/Mode-key LED target is touched."),
         "button" => println!("Turbo button\n\n  aps button status\n  aps button mode \"power modes\"\n  aps button mode hotkey\n\nPower modes: Quiet -> Balanced -> Performance -> Turbo -> Eco.\nOn battery, Performance/Turbo are skipped. Hotkey emits F14 press/release.\nThe user-account preference service restores this setting after reboot.\nPredatorSense always emits F15. Press counters reset on module reload."),
         "preferences" => println!("User-account preferences\n\n  aps preferences status\n\naps-state saves/restores active settings in ~/.local/state/aps/ as your account.\nThe kernel validates sysfs writes but does not open or parse preference files."),
@@ -322,6 +326,7 @@ fn run() -> Result<()> {
                 | "turbo-led"
                 | "preferences"
                 | "logo"
+                | "sleep"
                 | "gpu"
         )
     }) {
@@ -345,6 +350,7 @@ fn run() -> Result<()> {
         Some("button") => button(&args[1..]),
         Some("turbo-led") => turbo_led(&args[1..]),
         Some("logo") => logo::run(&args[1..]),
+        Some("sleep") => sleep::run(&args[1..]),
         Some("gpu") => gpu::run(&args[1..]),
         Some("boot") => boot::run(&args[1..]),
         Some("lighting") => lighting::run(&args[1..]),

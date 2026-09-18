@@ -12,6 +12,9 @@ for the separate root-owned `aps-boot` helper. The helper must be installed with
 bound to the original Acer ESP identity for this machine. It never writes the
 Linux bootloader ESP, bootloader entries or executable EFI files. Existing custom
 images are backed up under /var/lib/aps/boot-logo/ before replacement/reset.
+Installing a custom image automatically enables boot effects with the same
+authorization. A failed enable/readback restores the previous logo files and
+reports uncertainty about the firmware flag. Prepare-only and reset do not enable it.
 Only the startup effects master flag is a kernel control; images stay userspace.
 BIOS also has an independent sound mute setting, not yet exposed through APS.
 
@@ -76,6 +79,23 @@ not support a chosen fixed color. `logo opmode` is normally off and flashes on
 Turbo presses; it is not a continuously displayed performance color. Logo
 settings persist through the same user-account service. Speed is 1..5, brightness
 0..100. `logo on` means static white; use a hex color for another static color.
+
+Sleep lighting has a separate preference:
+
+```bash
+aps sleep logo static 0000FF 25
+aps sleep logo breathing 25 3
+aps sleep logo neon 25 3
+aps sleep status
+aps sleep off
+```
+
+This configures the next suspend without changing the awake logo. Default: off.
+The kernel keeps keyboard/Turbo off during sleep and restores normal lighting
+after wake or an aborted suspend. Hibernation always stays dark. Only native
+logo effects are available; firmware may override them during actual sleep.
+`aps-state` saves `sleep_logo` under the normal account and reloads it at boot,
+including while the lid is closed. Sleep settings never replace awake colors.
 
 The kernel handles physical-button mode cycling/F14, and PredatorSense/F15.
 Auto LED mode follows performance mode in firmware; Manual accepts RGB hex.

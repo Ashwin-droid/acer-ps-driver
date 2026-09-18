@@ -25,7 +25,8 @@ fn uid() -> Result<u32> {
 }
 const NOFOLLOW: i32 = 0x20000;
 const NONBLOCK: i32 = 0x800;
-const ORDER: [&str; 10] = [
+const ORDER: [&str; 11] = [
+    "sleep_logo",
     "profile",
     "keyboard_timeout",
     "keyboard.0",
@@ -42,6 +43,7 @@ const ORDER: [&str; 10] = [
 struct Snapshot(BTreeMap<String, String>);
 fn valid(key: &str, value: &str) -> bool {
     match key {
+        "sleep_logo" => control::sleep_logo(value.as_bytes()).is_some(),
         "logo" => control::logo(value.as_bytes()).is_some(),
         "profile" => control::profile(value.as_bytes()).is_some(),
         "button_mode" => control::button_mode(value.as_bytes()).is_some(),
@@ -196,6 +198,12 @@ fn capture(previous: &Snapshot) -> Result<Option<Snapshot>> {
     let dev_before = developer_stamp()?;
     let before = generation()?;
     let mut state = previous.clone();
+    // Configuration-only, available with the lid closed. Missing on an older
+    // module during upgrade: retain any previously saved sleep preference.
+    merge_sleep_logo_capture(
+        &mut state,
+        fs::read_to_string(Path::new(SYSFS).join("sleep_logo")),
+    )?;
     for name in ["profile", "button_mode"] {
         let value = read(name)?;
         if !valid(name, value.trim()) {
@@ -244,6 +252,18 @@ fn capture(previous: &Snapshot) -> Result<Option<Snapshot>> {
         return Ok(None);
     }
     Ok(Some(state))
+}
+
+fn merge_sleep_logo_capture(state: &mut Snapshot, value: std::io::Result<String>) -> Result<()> {
+    match value {
+        Ok(value) if valid("sleep_logo", value.trim()) => {
+            state.0.insert("sleep_logo".into(), value.trim().into());
+            Ok(())
+        }
+        Ok(_) => Err("invalid sleep logo state".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn merge_keyboard_capture(state: &mut Snapshot, text: &str) -> Result<()> {
@@ -662,6 +682,127 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sleep_and_awake_logo_records_stay_separate() {
+        let state = Snapshot::parse(
+            "APS-USERSPACE-STATE-1\nlogo=static 100 FF8C00\nsleep_logo=static 25 0000FF\n",
+        )
+        .unwrap();
+        assert_eq!(Snapshot::parse(&state.text()).unwrap(), state);
+        let mut pending = state.clone();
+        let mut writes = Vec::new();
+        restore_pending_with_wait(
+            &mut pending,
+            |key, value| {
+                writes.push((key.to_string(), value.to_string()));
+                Ok(())
+            },
+            |_| panic!("no profile changed"),
+        )
+        .unwrap();
+        assert_eq!(
+            writes,
+            [
+                ("sleep_logo".into(), "static 25 0000FF".into()),
+                ("logo".into(), "static 100 FF8C00".into()),
+            ]
+        );
+        assert!(pending.0.is_empty());
+        assert_eq!(state.0["logo"], "static 100 FF8C00");
+        assert!(!Snapshot::parse("APS-USERSPACE-STATE-1\nlogo=off\n")
+            .unwrap()
+            .0
+            .contains_key("sleep_logo"));
+        for value in [
+            "opmode 60",
+            "reapply",
+            "static 101 0000FF",
+            "static 25 GG0000",
+            "off\nsleep_logo=off",
+            "neon 25 0",
+            "raw 83",
+        ] {
+            assert!(
+                Snapshot::parse(&format!("APS-USERSPACE-STATE-1\nsleep_logo={value}\n")).is_err()
+            );
+        }
+    }
+    #[test]
+    fn sleep_logo_capture_handles_upgrade_and_invalid_readback() {
+        let mut state = Snapshot::parse(
+            "APS-USERSPACE-STATE-1\nlogo=static 100 FF8C00\nsleep_logo=static 25 0000FF\n",
+        )
+        .unwrap();
+        let before = state.clone();
+        merge_sleep_logo_capture(&mut state, Err(std::io::ErrorKind::NotFound.into())).unwrap();
+        assert_eq!(state, before);
+        for value in ["unknown", "opmode 60", "raw"] {
+            assert!(merge_sleep_logo_capture(&mut state, Ok(value.into())).is_err());
+            assert_eq!(state, before);
+        }
+        assert!(merge_sleep_logo_capture(
+            &mut state,
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        )
+        .is_err());
+        merge_sleep_logo_capture(&mut state, Ok("neon 25 3\n".into())).unwrap();
+        assert_eq!(state.0["sleep_logo"], "neon 25 3");
+        assert_eq!(state.0["logo"], before.0["logo"]);
+    }
+    #[test]
+    fn sleep_logo_restores_even_if_internal_lighting_is_lid_blocked() {
+        let mut pending = Snapshot::parse("APS-USERSPACE-STATE-1\nsleep_logo=static 25 0000FF\nkeyboard.0=static 60 0 none 1 FF0000\nturbo_led=FF0000\n").unwrap();
+        let mut writes = Vec::new();
+        let errors = restore_pending_with_wait(
+            &mut pending,
+            |key, _| {
+                writes.push(key.to_string());
+                if key == "sleep_logo" {
+                    Ok(())
+                } else {
+                    Err("lid closed".into())
+                }
+            },
+            |_| panic!("no profile changed"),
+        )
+        .unwrap();
+        assert_eq!(writes, ["sleep_logo", "keyboard_effect", "turbo_led"]);
+        assert_eq!(errors.len(), 2);
+        assert!(!pending.0.contains_key("sleep_logo"));
+        assert!(only_lid_preferences(&pending));
+    }
+    #[test]
+    fn failed_sleep_preference_restore_is_retained_for_retry() {
+        let mut pending =
+            Snapshot::parse("APS-USERSPACE-STATE-1\nsleep_logo=neon 25 3\nlogo=off\n").unwrap();
+        let errors = restore_pending_with_wait(
+            &mut pending,
+            |key, _| {
+                if key == "sleep_logo" {
+                    Err("driver not ready".into())
+                } else {
+                    Ok(())
+                }
+            },
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(pending.0.len(), 1);
+        assert!(!only_lid_preferences(&pending));
+        let mut writes = Vec::new();
+        restore_pending_with_wait(
+            &mut pending,
+            |key, value| {
+                writes.push((key.to_string(), value.to_string()));
+                Ok(())
+            },
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(writes, [("sleep_logo".into(), "neon 25 3".into())]);
+        assert!(pending.0.is_empty());
+    }
     #[test]
     fn docked_deferral_only_accepts_internal_lighting_fields() {
         let mut pending = Snapshot::parse(

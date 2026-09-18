@@ -18,7 +18,7 @@ for name in cpu_fan_rpm gpu_fan_rpm keyboard_capabilities fan_lease_ms button_pr
     chown "root:$access_group" "$base/$name"
     chmod 0440 "$base/$name"
 done
-for name in profile fan_control keyboard_effect keyboard_timeout button_mode turbo_led turbo_led_mode logo; do
+for name in profile fan_control keyboard_effect keyboard_timeout button_mode turbo_led turbo_led_mode logo sleep_logo; do
     chown "root:$access_group" "$base/$name"
     chmod 0660 "$base/$name"
 done

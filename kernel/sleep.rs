@@ -24,7 +24,7 @@ unsafe extern "C" fn notify(
         }
         _ => return bindings::NOTIFY_DONE as i32,
     };
-    crate::sleep_event(prepare);
+    crate::sleep_event(prepare, event == bindings::PM_SUSPEND_PREPARE as _);
     // Lighting failure must not veto system sleep. POST still undoes PREPARE.
     bindings::NOTIFY_OK as i32
 }

@@ -162,6 +162,15 @@ fn change_with_checkpoint(
     image: Option<&[u8]>,
     checkpoint: impl FnOnce() -> Result<()>,
 ) -> Result<Option<PathBuf>> {
+    change_with_hooks(esp, store, image, checkpoint, || Ok(()))
+}
+fn change_with_hooks(
+    esp: &Esp,
+    store: &Path,
+    image: Option<&[u8]>,
+    checkpoint: impl FnOnce() -> Result<()>,
+    after_publish: impl FnOnce() -> Result<()>,
+) -> Result<Option<PathBuf>> {
     let extension = image.map(boot_media::validate).transpose()?;
     let before = esp.present()?;
     if image.is_none() && before == [false, false] {
@@ -234,6 +243,7 @@ fn change_with_checkpoint(
             }
         }
         File::open(&esp.device)?.sync_all()?;
+        after_publish()?;
         Ok(())
     })();
     if let Err(error) = result {
@@ -286,6 +296,33 @@ fn change_with_checkpoint(
     }
     File::open(&esp.device)?.sync_all()?;
     Ok(Some(backup))
+}
+
+fn enable_effects_with(
+    mut read: impl FnMut() -> Result<String>,
+    mut write: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    use crate::boot_policy::Effects;
+    let before = read()?;
+    match Effects::parse(before.as_bytes()) {
+        Some(Effects::On) => Ok(()),
+        Some(Effects::Off) => {
+            write("on")?;
+            let after = read()?;
+            if Effects::parse(after.as_bytes()) != Some(Effects::On) {
+                return Err("Boot effects did not read back as on".into());
+            }
+            Ok(())
+        }
+        None => Err("Unrecognized boot-effects state; refusing automatic change".into()),
+    }
+}
+fn enable_effects() -> Result<()> {
+    enable_effects_with(
+        || Ok(fs::read_to_string("/sys/class/misc/acer-phn16s/boot_effects")?),
+        |value| Ok(fs::write("/sys/class/misc/acer-phn16s/boot_effects", value)?),
+    )
+    .map_err(|error| format!("Cannot enable boot effects: {error}. Check aps boot status; the firmware change may have partially applied").into())
 }
 
 pub(crate) fn run(args: &[String]) -> Result<()> {
@@ -359,7 +396,21 @@ pub(crate) fn run(args: &[String]) -> Result<()> {
     }
     lock.lock()?;
     let esp = Esp::open()?;
-    let backup = change(&esp, Path::new(STORE), bytes.as_deref())?;
+    let backup = if let Some(image) = bytes.as_deref() {
+        // Finish validating/publishing the logo before enabling its master flag.
+        // A failed firmware operation goes through the existing file rollback.
+        // Firmware and FAT cannot be made one atomic transaction; errors report
+        // uncertainty about the flag instead of claiming it stayed unchanged.
+        change_with_hooks(
+            &esp,
+            Path::new(STORE),
+            Some(image),
+            || Ok(()),
+            enable_effects,
+        )?
+    } else {
+        change(&esp, Path::new(STORE), None)?
+    };
     println!(
         "Boot logo {}. Applies at next boot.",
         if bytes.is_some() {
@@ -371,11 +422,8 @@ pub(crate) fn run(args: &[String]) -> Result<()> {
     if let Some(backup) = backup {
         println!("Previous custom files backed up at {}", backup.display());
     }
-    if bytes.is_some()
-        && fs::read_to_string("/sys/class/misc/acer-phn16s/boot_effects")
-            .is_ok_and(|value| value.trim() == "off")
-    {
-        println!("Boot effects are off. Enable them with: aps boot effects on");
+    if bytes.is_some() {
+        println!("Boot effects: on");
     }
     Ok(())
 }
@@ -383,6 +431,34 @@ pub(crate) fn run(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn logo_auto_enable_is_checked_and_avoids_redundant_writes() {
+        use std::cell::Cell;
+        let enabled = Cell::new(false);
+        let writes = Cell::new(0);
+        enable_effects_with(
+            || Ok(if enabled.get() { "on" } else { "off" }.into()),
+            |value| {
+                assert_eq!(value, "on");
+                enabled.set(true);
+                writes.set(writes.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(writes.get(), 1);
+        enable_effects_with(|| Ok("on\n".into()), |_| panic!("already enabled")).unwrap();
+        assert!(enable_effects_with(
+            || Ok("unknown".into()),
+            |_| panic!("invalid state must not write")
+        )
+        .is_err());
+        assert!(enable_effects_with(|| Ok("off".into()), |_| Ok(())).is_err());
+        assert!(
+            enable_effects_with(|| Ok("off".into()), |_| Err("firmware write failed".into()))
+                .is_err()
+        );
+    }
     #[test]
     fn replace_and_reset_on_disposable_fat_image_not_real_esp() {
         let dir = tempfile::tempdir().unwrap();
@@ -417,6 +493,37 @@ mod tests {
         let recovered = dir.path().join("recovered.jpg");
         esp.export("AcerLogo.jpg", &recovered).unwrap();
         assert_eq!(fs::read(recovered).unwrap(), bytes);
+        let mut new_bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut new_bytes)
+            .encode(&[255, 0, 0], 1, 1, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let calls = std::cell::Cell::new(0);
+        assert!(change_with_hooks(
+            &esp,
+            dir.path(),
+            Some(&new_bytes),
+            || Ok(()),
+            || {
+                calls.set(calls.get() + 1);
+                let installed = dir.path().join("published-before-effects.jpg");
+                esp.export("AcerLogo.jpg", &installed)?;
+                assert_eq!(fs::read(installed)?, new_bytes);
+                Err("injected firmware enable failure".into())
+            }
+        )
+        .is_err());
+        assert_eq!(calls.get(), 1);
+        let rolled_back = dir.path().join("rolled-back-after-effects-failure.jpg");
+        esp.export("AcerLogo.jpg", &rolled_back).unwrap();
+        assert_eq!(fs::read(rolled_back).unwrap(), bytes);
+        assert!(change_with_hooks(
+            &esp,
+            dir.path(),
+            Some(b"bad image"),
+            || Ok(()),
+            || panic!("invalid image must not enable effects")
+        )
+        .is_err());
         assert!(change(&esp, dir.path(), Some(b"bad image")).is_err());
         assert_eq!(esp.present().unwrap(), [true, false]);
         change(&esp, dir.path(), None).unwrap();

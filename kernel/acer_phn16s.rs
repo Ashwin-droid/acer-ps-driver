@@ -57,6 +57,7 @@ struct State {
     turbo_led: Option<control::TurboLed>,
     turbo_led_manual: control::TurboLed,
     logo: Option<control::Logo>,
+    sleep_logo: control::Logo,
     keyboard_zones: [Option<control::Light>; 4],
     generation: u64,
     sleep: sleep_state::SleepState,
@@ -121,6 +122,7 @@ static ATTRS: &[Attribute] = &[
     attr(c"logo_capabilities", false),
     attr(c"dev_mode", false),
     attr(c"sleep_status", false),
+    attr(c"sleep_logo", true),
     attr(c"lid_state", false),
     attr(c"lid_status", false),
     root_control(c"mux_mode"),
@@ -235,6 +237,7 @@ fn read_control(name: &[u8], state: &State, out: &mut Output) -> Result<()> {
         return Ok(());
     }
     let format_result = match name {
+        b"sleep_logo" => writeln!(out, "{}", state.sleep_logo),
         b"logo_capabilities" => writeln!(out, "83 1 {:08x}", hardware_hid::logo_info()?),
         b"logo" => match state.logo {
             Some(setting) => writeln!(out, "{}", setting),
@@ -319,6 +322,11 @@ fn read_control(name: &[u8], state: &State, out: &mut Output) -> Result<()> {
 fn write_control(name: &[u8], input: &[u8], state: &mut State) -> Result<()> {
     // Parsers reject unsupported, malformed and out-of-range requests before any hardware I/O.
     match name {
+        b"sleep_logo" => {
+            // Configuration only: never touch the awake logo or its cache.
+            state.sleep_logo = control::sleep_logo(input).ok_or(EINVAL)?;
+            Ok(())
+        }
         b"boot_effects" => {
             let value = boot_policy::Effects::parse(input).ok_or(EINVAL)?;
             let stamp = now();
@@ -524,7 +532,7 @@ fn run_probe(input:&[u8],state:&mut State)->Result<()> {
     Ok(())
 }
 
-fn sleep_event(prepare: bool) {
+fn sleep_event(prepare: bool, suspend: bool) {
     let pointer = STATE.load(Ordering::Acquire);
     if pointer.is_null() { return; }
     // SAFETY: PM registration is removed and drained before STATE is freed.
@@ -533,8 +541,7 @@ fn sleep_event(prepare: bool) {
         if !state.sleep.prepare() { return; }
         // These temporary hardware writes deliberately bypass cache/generation
         // updates. Userspace persistence continues to see the intended colors.
-        let off = control::Light { mode: 1, brightness: 0, speed: 0,
-            direction: 0, zones: 15, rgb: [0; 3] };
+        let lighting = sleep_state::SleepLighting::new(state.sleep_logo, suspend);
         let mut error = 0;
         // Release an outstanding manual fan lease before freezing its owner.
         if state.fan_deadline != 0 {
@@ -544,13 +551,18 @@ fn sleep_event(prepare: bool) {
             }
         }
         for (component, result) in [
-            ("keyboard", hardware_hid::set_light(off)),
-            ("logo", hardware_hid::set_logo(control::Logo::Off)),
-            ("turbo", hardware_hid::set_turbo_led(control::TurboLed::Off)),
+            ("keyboard", hardware_hid::set_light(lighting.keyboard)),
+            ("logo", hardware_hid::set_logo(lighting.logo)),
+            ("turbo", hardware_hid::set_turbo_led(lighting.turbo)),
         ] {
             if let Err(e) = result {
                 error = e.to_errno();
-                pr_err!("acer_phn16s: sleep {} off failed: {}\n", component, error);
+                pr_err!("acer_phn16s: sleep {} setting failed: {}\n", component, error);
+                if component == "logo" && lighting.logo != control::Logo::Off {
+                    if let Err(fallback) = hardware_hid::set_logo(control::Logo::Off) {
+                        pr_err!("acer_phn16s: sleep logo off fallback failed: {}\n", fallback.to_errno());
+                    }
+                }
             }
         }
         state.sleep.error = error;
@@ -558,7 +570,8 @@ fn sleep_event(prepare: bool) {
             || state.logo.is_none() || state.turbo_led.is_none() {
             pr_warn!("acer_phn16s: sleep: uncached RGB settings cannot be recovered; only configured settings will resume\n");
         }
-        pr_info!("acer_phn16s: sleep RGB blackout complete, error={}\n", error);
+        let logo_action = if lighting.logo == control::Logo::Off { "off" } else { "configured sleep effect" };
+        pr_info!("acer_phn16s: sleep lighting submitted: logo={}, internal LEDs off, error={}\n", logo_action, error);
     } else if state.sleep.resume(now()) {
         turbo_button::take_press();
         turbo_button::take_sense_press();
@@ -624,11 +637,9 @@ fn apply_internal_rgb(state: &State) -> i32 {
 fn restore_rgb(state: &mut State) {
     refresh_lid(state);
     let mut error = 0;
-    if let Some(setting) = state.logo {
-        if let Err(e) = hardware_hid::set_logo(setting) {
-            error = e.to_errno();
-            pr_err!("acer_phn16s: wake logo restore failed: {}\n", error);
-        }
+    if let Err(e) = hardware_hid::set_logo(sleep_state::awake_logo(state.logo)) {
+        error = e.to_errno();
+        pr_err!("acer_phn16s: wake logo restore failed: {}\n", error);
     }
     // Firmware can overlay the Turbo LED during power transitions. Restore it
     // last, after the settling delay, using the current auto/manual choice.
@@ -751,6 +762,7 @@ impl kernel::Module for AcerModule {
                 turbo_led: None,
                 turbo_led_manual: control::TurboLed::Rgb([255; 3]),
                 logo: None,
+                sleep_logo: control::Logo::Off,
                 keyboard_zones: [None; 4],
                 generation: 0,
                 sleep: sleep_state::SleepState::default(),

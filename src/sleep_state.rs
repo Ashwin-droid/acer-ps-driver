@@ -1,6 +1,36 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //! Allocation-free suspend policy, shared with host-side tests.
-use crate::control::Light;
+use crate::control::{Light, Logo, TurboLed};
+
+// The internal LEDs stay dark throughout sleep, regardless of the lid's last
+// sample. There is no polling of a suspended lid/controller. Hibernation and
+// image restore always use blackout instead of the suspend-only logo profile.
+pub(crate) struct SleepLighting {
+    pub(crate) keyboard: Light,
+    pub(crate) logo: Logo,
+    pub(crate) turbo: TurboLed,
+}
+impl SleepLighting {
+    pub(crate) fn new(logo: Logo, suspend: bool) -> Self {
+        Self {
+            keyboard: Light {
+                mode: 1,
+                brightness: 0,
+                speed: 0,
+                direction: 0,
+                zones: 15,
+                rgb: [0; 3],
+            },
+            logo: if suspend { logo } else { Logo::Off },
+            turbo: TurboLed::Off,
+        }
+    }
+}
+
+// With no configured awake color, never leave a sleep-only effect running.
+pub(crate) fn awake_logo(cached: Option<Logo>) -> Logo {
+    cached.unwrap_or(Logo::Off)
+}
 
 pub(crate) const SETTLE_NS: u64 = 2_000_000_000;
 const RETRY_NS: [u64; 2] = [2_000_000_000, 5_000_000_000];

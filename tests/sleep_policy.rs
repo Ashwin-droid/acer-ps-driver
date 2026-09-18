@@ -6,6 +6,66 @@ mod sleep_state;
 use sleep_state::{keyboard_reports, SleepState, SETTLE_NS};
 
 #[test]
+fn sleep_profile_only_changes_external_logo_and_hibernate_is_dark() {
+    for value in ["off", "static 25 0000FF", "breathing 25 3", "neon 100 5"] {
+        let configured = control::sleep_logo(value.as_bytes()).unwrap();
+        let sleep = sleep_state::SleepLighting::new(configured, true);
+        assert_eq!(sleep.logo, configured);
+        assert_eq!(sleep.keyboard.brightness, 0);
+        assert_eq!(sleep.keyboard.zones, 15);
+        assert_eq!(sleep.turbo, control::TurboLed::Off);
+        let hibernate = sleep_state::SleepLighting::new(configured, false);
+        assert_eq!(hibernate.logo, control::Logo::Off);
+        assert_eq!(hibernate.keyboard, sleep.keyboard);
+        assert_eq!(hibernate.turbo, control::TurboLed::Off);
+    }
+}
+
+#[test]
+fn sleep_logo_never_replaces_awake_cache_on_wake_or_abort() {
+    let awake = control::logo(b"static 100 FF8C00").unwrap();
+    let configured = control::sleep_logo(b"static 25 0000FF").unwrap();
+    let mut state = SleepState::default();
+    state.prepare();
+    assert_eq!(
+        sleep_state::SleepLighting::new(configured, true).logo,
+        configured
+    );
+    // Same POST path is used for a normal wake and an aborted suspend.
+    state.resume(0);
+    assert!(state.ready(SETTLE_NS));
+    assert_eq!(sleep_state::awake_logo(Some(awake)), awake);
+    assert_eq!(sleep_state::awake_logo(None), control::Logo::Off);
+    state.completed(SETTLE_NS, 0);
+    state.prepare();
+    assert_eq!(
+        sleep_state::SleepLighting::new(configured, true).logo,
+        configured
+    );
+}
+
+#[test]
+fn sleep_logo_rejects_unbounded_or_stateful_requests() {
+    for value in [
+        "opmode 25",
+        "reapply",
+        "static 101 0000FF",
+        "static -1 0000FF",
+        "static 25 0000FF extra",
+        "static 25 0000FF\0",
+        "neon 25 0",
+        "neon 25 6",
+        "breathing 25 3 0000FF",
+        "strobe 25 0000FF",
+        "raw a4 83",
+    ] {
+        assert!(control::sleep_logo(value.as_bytes()).is_none(), "{value:?}");
+    }
+    assert!(control::sleep_logo(&[b'x'; 129]).is_none());
+    assert!(control::sleep_logo(&[0xff]).is_none());
+}
+
+#[test]
 fn sleep_blocks_restore_and_post_waits_two_seconds() {
     let mut state = SleepState::default();
     assert_eq!(state.phase(), "awake");

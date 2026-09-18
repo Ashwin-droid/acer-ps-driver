@@ -276,6 +276,11 @@ Missing/replaced/mounted/incorrectly labeled partitions fail closed. The Linux
 Previous custom files are backed up under root-owned `/var/lib/aps/boot-logo/`
 before replacement or reset. The new file is staged and read back before the
 firmware-visible rename; interrupted/failed operations report their backup path.
+After installation and file readback succeed, the helper automatically enables
+`aps boot effects on` under the same authorization. An already-on setting is
+left alone. If enabling or verifying the setting fails, the old logo files are
+restored and the error reports that the firmware flag may have partially changed.
+Preparing a file without installing it never changes the boot-effect setting.
 Reset removes only the two custom filenames, leaving the firmware's built-in
 logo and all bootloader files alone. Logo status also requests authorization to
 inspect the protected ESP. No logo files, image parsers or filesystem operations
@@ -358,15 +363,36 @@ restoring the back logo. None of this changes your desktop's lid/suspend policy.
 
 ### System sleep
 
-The kernel module turns off the keyboard, cover logo and Turbo LED before system
-sleep. After waking, it waits two seconds for the controller to settle, then
+The kernel module turns off the keyboard and Turbo LED before system sleep.
+The cover logo defaults to off, but can use a separate suspend-only profile:
+
+```bash
+aps sleep logo static 0000FF 25
+aps sleep logo breathing 25 3
+aps sleep logo neon 25 3
+aps sleep status
+aps sleep off
+```
+
+These commands configure the next suspend without changing awake lighting.
+Only Static accepts a color. Brightness is 0..100, animation speed 1..5.
+The profile is kept in kernel memory and saved/restored by the user-account
+`aps-state` service alongside normal preferences. Older records default to off
+on a fresh module load. Keyboard and Turbo stay dark even if the lid was open
+when suspending; there is no polling of the lid while asleep. Hibernation and
+hibernation-image restore always use all-off. Firmware may override the logo
+during sleep; an accepted request is not physical readback. No software animation
+or CPU wakeup loop runs during sleep. A failed sleep-logo write is logged and
+followed by one off attempt, without vetoing sleep.
+
+After waking, the driver waits two seconds for the controller to settle, then
 restores the current cached lighting settings, with the Turbo LED last. Four-zone
 Static colors are preserved; native animations restart together. An aborted
 suspend also triggers restoration. Failed writes are logged to dmesg and retried
 up to three attempts in total.
 
-Temporary sleep-off writes do not change your saved preferences or the driver's
-cached choices. No userspace sleep script or kernel disk access is involved.
+Temporary sleep lighting writes do not replace your awake preferences or cached
+choices. No userspace sleep script or kernel disk access is involved.
 During sleep, hardware queries and control writes return EBUSY; cached choices
 remain readable. Any active manual fan lease is released to Auto before sleep.
 Software effects still need their userspace process; the kernel can restore only
@@ -403,6 +429,7 @@ All attributes are under /sys/class/misc/acer-phn16s/.
 | logo | Read/write | off; static BRIGHTNESS RGB; breathing/neon BRIGHTNESS SPEED; opmode BRIGHTNESS; reapply latest cached setting |
 | logo_capabilities | Read | Cover-logo target 83, one zone, native-effect mask |
 | sleep_status | Read | awake/sleeping/restoring/error, sleep cycles, restore attempts, last errno |
+| sleep_logo | Read/write | Next-suspend logo: off; static BRIGHTNESS RGB; breathing/neon BRIGHTNESS SPEED. Memory-only until suspend; default off |
 | lid_state | Read | open, closed or unknown; cached ACPI lid reading |
 | lid_status | Read | Lid state, changes, transition attempts and last errno |
 | mux_mode | User read / root write | Firmware-reported mode; write optimus, nvidia or auto; restart required |

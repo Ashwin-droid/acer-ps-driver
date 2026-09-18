@@ -67,5 +67,11 @@ No sound setter, raw Setup-variable writer, direct EC accessor, or new firmware
 selector was added. Independent sound control needs a verified access path;
 the existing PS command cannot be split into two independent writes by renaming it.
 
+Follow-up: the live Setup variable is marked immutable in efivarfs. The
+AcerBIOSConfigurationToolSmm module was also decompiled; no verified narrow
+sound-mute write method was established. No immutable flag was cleared and
+no raw Setup-variable writer was introduced. Custom-logo installation now
+auto-enables the already verified master switch, with file rollback on failure.
+
 Extraction is reproducible with scripts/extract-boot-control-research.py.
 The extracted PE modules and Ghidra exports are under research/boot-control-v126/.

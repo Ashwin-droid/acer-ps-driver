@@ -85,7 +85,14 @@ fn only_internal_lighting_is_gated() {
     ] {
         assert!(lid_state::controlled(name));
     }
-    for name in ["logo", "profile", "fan_control", "button_mode", "lid_state"] {
+    for name in [
+        "logo",
+        "sleep_logo",
+        "profile",
+        "fan_control",
+        "button_mode",
+        "lid_state",
+    ] {
         assert!(!lid_state::controlled(name));
     }
 }

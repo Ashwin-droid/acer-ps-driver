@@ -186,6 +186,59 @@ fn kernel_rejects_invalid_requests_without_changing_control_state() {
 }
 
 #[test]
+#[ignore = "requires the updated live module; changes sleep preferences only, never suspends"]
+fn sleep_preferences_are_bounded_and_do_not_change_awake_lighting() {
+    struct Restore(String);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            write("sleep_logo", self.0.as_bytes()).unwrap();
+        }
+    }
+    let _restore = Restore(read("sleep_logo"));
+    let awake_logo = read("logo");
+    let keyboard = read("keyboard_state");
+    let turbo = read("turbo_led");
+    let pm = read("sleep_status");
+    let lid = read("lid_state");
+    for value in ["off", "static 25 0000FF", "breathing 25 3", "neon 25 5"] {
+        write("sleep_logo", value.as_bytes()).unwrap();
+        assert_eq!(read("sleep_logo").trim(), value);
+        assert_eq!(read("logo"), awake_logo);
+        assert_eq!(read("keyboard_state"), keyboard);
+        assert_eq!(read("turbo_led"), turbo);
+        assert_eq!(read("sleep_status"), pm);
+        assert_eq!(read("lid_state"), lid);
+    }
+    let before = read("sleep_logo");
+    let generation = read("preferences_generation");
+    for value in [
+        "opmode 25",
+        "reapply",
+        "raw a4 83",
+        "static 101 0000FF",
+        "static 25 0000FF extra",
+        "static 25 0000FF\0",
+        "neon 25 0",
+        "off extra",
+    ] {
+        assert_eq!(
+            write("sleep_logo", value.as_bytes())
+                .unwrap_err()
+                .raw_os_error(),
+            Some(22)
+        );
+    }
+    assert_eq!(
+        write("sleep_logo", &[b'x'; 129])
+            .unwrap_err()
+            .raw_os_error(),
+        Some(22)
+    );
+    assert_eq!(read("sleep_logo"), before);
+    assert_eq!(read("preferences_generation"), generation);
+}
+
+#[test]
 #[ignore = "briefly enables Maximum, then tests kernel lease expiry without any CLI process"]
 fn kernel_restores_auto_when_userspace_stops_renewing() {
     struct Restore;

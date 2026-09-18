@@ -4,6 +4,71 @@ use std::{
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[test]
+#[ignore = "requires updated live driver; restores only a memory-only sleep preference"]
+fn disk_sleep_preference_restores_without_changing_awake_logo() {
+    const SYSFS: &str = "/sys/class/misc/acer-phn16s";
+    struct Restore(String);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            fs::write(format!("{SYSFS}/sleep_logo"), &self.0).unwrap();
+        }
+    }
+    let original = fs::read_to_string(format!("{SYSFS}/sleep_logo")).unwrap();
+    let _restore = Restore(original.clone());
+    let awake = fs::read_to_string(format!("{SYSFS}/logo")).unwrap();
+    let sleep = fs::read_to_string(format!("{SYSFS}/sleep_status")).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let dir = temporary.path().join("aps");
+    fs::create_dir(&dir).unwrap();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let prefs = dir.join("preferences");
+    fs::write(
+        &prefs,
+        "APS-USERSPACE-STATE-1\nsleep_logo=static 17 123456\n",
+    )
+    .unwrap();
+    fs::set_permissions(&prefs, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(format!("{SYSFS}/sleep_logo"), "off").unwrap();
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_aps-state"))
+            .arg("restore")
+            .env("XDG_STATE_HOME", temporary.path())
+            .output()
+            .unwrap()
+    };
+    let result = run();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(format!("{SYSFS}/sleep_logo"))
+            .unwrap()
+            .trim(),
+        "static 17 123456"
+    );
+    assert_eq!(fs::read_to_string(format!("{SYSFS}/logo")).unwrap(), awake);
+    assert_eq!(
+        fs::read_to_string(format!("{SYSFS}/sleep_status")).unwrap(),
+        sleep
+    );
+    fs::write(format!("{SYSFS}/sleep_logo"), &original).unwrap();
+    let generation = fs::read_to_string(format!("{SYSFS}/preferences_generation")).unwrap();
+    fs::write(&prefs, "APS-USERSPACE-STATE-1\nsleep_logo=opmode 60\n").unwrap();
+    assert!(!run().status.success());
+    assert_eq!(
+        fs::read_to_string(format!("{SYSFS}/sleep_logo")).unwrap(),
+        original
+    );
+    assert_eq!(
+        fs::read_to_string(format!("{SYSFS}/preferences_generation")).unwrap(),
+        generation
+    );
+}
+
 #[test]
 fn helper_validates_private_user_owned_data_without_hardware_access() {
     let root = std::env::temp_dir().join(format!(
@@ -25,7 +90,7 @@ fn helper_validates_private_user_owned_data_without_hardware_access() {
             .output()
             .unwrap()
     };
-    let valid = b"APS-USERSPACE-STATE-1\nprofile=eco\nbutton_mode=hotkey\nkeyboard_timeout=off\n";
+    let valid = b"APS-USERSPACE-STATE-1\nprofile=eco\nbutton_mode=hotkey\nkeyboard_timeout=off\nsleep_logo=static 25 0000FF\n";
     fs::write(&prefs, valid).unwrap();
     fs::set_permissions(&prefs, fs::Permissions::from_mode(0o600)).unwrap();
     assert!(run().status.success());

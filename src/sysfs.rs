@@ -24,6 +24,8 @@ fn path(name: &str) -> Result<PathBuf> {
             | "preferences_generation"
             | "logo"
             | "logo_capabilities"
+            | "sleep_logo"
+            | "sleep_status"
             | "lid_state"
             | "lid_status"
             | "mux_mode"

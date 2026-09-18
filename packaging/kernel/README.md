@@ -23,7 +23,7 @@ The account's primary group receives access to these attributes under
   keyboard_state, turbo_led_manual, preferences_generation, logo_capabilities,
   sleep_status, lid_state, lid_status, mux_request.
 - Read/write: profile, fan_control, keyboard_effect, keyboard_timeout,
-  button_mode, turbo_led, turbo_led_mode, logo.
+  button_mode, turbo_led, turbo_led_mode, logo, sleep_logo.
 - User read / root write: mux_mode, mode 0640 with an additional kernel CAP_SYS_ADMIN check.
 - User read / root write: boot_effects, the startup effects master switch, not the separate BIOS sound mute setting.
 
@@ -48,8 +48,14 @@ Fan overrides expire after five seconds without renewal; a kernel worker restore
 Auto. Unload also requests Auto for an outstanding lease. Firmware failures are
 logged/retried. A separate userspace service can restore preferences via these controls.
 
-A kernel blocking PM notifier turns off keyboard, cover-logo and Turbo RGB before
-suspend/hibernation. Temporary off writes never change cached settings or preference
+A kernel blocking PM notifier turns off keyboard and Turbo RGB before sleep.
+The cover logo uses the memory-only `sleep_logo` preference during suspend:
+off by default, static BRIGHTNESS RGB, or breathing/neon BRIGHTNESS SPEED.
+Hibernation and image restore always turn all RGB off. Keyboard and Turbo remain
+off during suspend regardless of the last lid reading. A failed sleep-logo write
+triggers one off attempt and is logged, but does not veto sleep. Firmware can
+override the requested effect during sleep; no physical readback is available.
+Temporary lighting writes never change cached awake settings or preference
 generation. Hardware reads and all writes return EBUSY while sleeping; cached
 settings remain readable. The worker stops hardware/button actions during sleep,
 and an active manual fan lease is returned to Auto before sleep.
