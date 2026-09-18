@@ -478,12 +478,26 @@ on keeping the CLI unmodified, or on secrets.
 - dist/aps-kernel-0.2.0-7.1.5.tar.gz: signed module, one-time installer,
   permission helper, udev rule and uninstaller. No userspace CLI or key material.
 
-On this laptop the module is installed in
-/lib/modules/7.1.5-76070105-generic/updates/acer_phn16s.ko and loaded now.
+This laptop now uses the production-only `acer-phn16s/0.3.0` DKMS source package.
+The current kernel's module is installed under
+`/lib/modules/7.1.5-76070105-generic/updates/dkms/acer_phn16s.ko.zst`.
 /etc/modules-load.d/aps.conf loads it after reboot; the udev rule restores narrow
-sysfs permissions. No reboot or new MOK enrollment is needed now.
+sysfs permissions. Migration did not unload the running module or change MOK enrollment.
 
-The separate kernel installer takes the normal account name:
+DKMS rebuilds for eligible kernel updates using the target headers and matching
+system Rust compiler. HID/input layout constants are regenerated, with field and
+callback type checks. Missing Rust metadata is downloaded through APT at the exact
+header-package version into a root-owned cache. Missing compiler/API compatibility
+fails the build instead of reusing the old module. See
+[DKMS installation and limits](packaging/dkms/README.md) for details.
+
+```bash
+dkms status -m acer-phn16s
+sudo python3 scripts/install-aps-dkms.py
+```
+
+The older fixed-kernel binary-bundle installer takes the normal account name.
+Do not install that unmanaged bundle over a DKMS installation:
 
     sudo ./install.sh ashwinmhaskar
 
@@ -504,8 +518,10 @@ restore and capture succeed. Shutdown during an incomplete restore preserves
 that file instead of overwriting it with firmware defaults. Permission guidance
 is shown only for actual permission errors, not firmware I/O failures.
 
-The module is tied to the named kernel and BIOS. A different kernel needs a
-rebuild; changed model/BIOS fails the guard. It is not a DKMS package.
+Every module binary is tied to the kernel it was built for. DKMS handles rebuilds
+for compatible updates, but cannot guarantee future API/toolchain compatibility.
+The model/board/BIOS guards remain unchanged. The legacy binary archive itself
+is not a DKMS package.
 
 ## Build and verification
 

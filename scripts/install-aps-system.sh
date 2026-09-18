@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 [[ $EUID == 0 ]]
+if [[ -d /var/lib/dkms/acer-phn16s ]]; then
+    printf '%s\n' 'APS is managed by DKMS. Update its versioned source package; this legacy installer will not stop the running preference service.' >&2
+    exit 1
+fi
 workspace=/home/ashwinmhaskar/Documents/Tests/vibedriver-acer-ps
 account=ashwinmhaskar
 state_dir=/home/ashwinmhaskar/.local/state

@@ -1,5 +1,44 @@
 /* Build-time ABI constants only. No C driver code is compiled. */
 #include <linux/hid.h>
+
+/* The Rust transport uses typed pointer loads and fixed callback signatures.
+ * Regenerating offsets alone would not catch a field or callback type change.
+ * These checks run in clang/bindgen; no C driver object is linked. */
+#define PH_FIELD(type, member, expected) \
+    _Static_assert(__builtin_types_compatible_p(__typeof__(((type *)0)->member), expected), \
+                   "APS ABI changed: " #type "." #member)
+PH_FIELD(struct hid_device, bus, __u16);
+PH_FIELD(struct hid_device, vendor, __u32);
+PH_FIELD(struct hid_device, product, __u32);
+PH_FIELD(struct hid_device, rsize, unsigned int);
+PH_FIELD(struct hid_device, dev_rsize, unsigned int);
+PH_FIELD(struct hid_device, rdesc, const __u8 *);
+PH_FIELD(struct hid_device, dev_rdesc, const __u8 *);
+PH_FIELD(struct hid_device, quirks, unsigned int);
+PH_FIELD(struct hid_device, claimed, unsigned int);
+PH_FIELD(struct input_dev, name, const char *);
+PH_FIELD(struct input_dev, phys, const char *);
+PH_FIELD(struct input_dev, id.bustype, __u16);
+PH_FIELD(struct hid_driver, probe, int (*)(struct hid_device *, const struct hid_device_id *));
+PH_FIELD(struct hid_driver, remove, void (*)(struct hid_device *));
+PH_FIELD(struct hid_driver, raw_event, int (*)(struct hid_device *, struct hid_report *, u8 *, int));
+PH_FIELD(struct hid_driver, reset_resume, int (*)(struct hid_device *));
+PH_FIELD(struct input_handler, filter, bool (*)(struct input_handle *, unsigned int, unsigned int, int));
+PH_FIELD(struct input_handler, match, bool (*)(struct input_handler *, struct input_dev *));
+PH_FIELD(struct input_handler, connect, int (*)(struct input_handler *, struct input_dev *, const struct input_device_id *));
+PH_FIELD(struct input_handler, disconnect, void (*)(struct input_handle *));
+_Static_assert(sizeof(enum hid_report_type) == 4 && sizeof(enum hid_class_request) == 4,
+               "APS HID request enum ABI changed");
+_Static_assert(__builtin_types_compatible_p(__typeof__(&hid_hw_raw_request),
+               int (*)(struct hid_device *, unsigned char, __u8 *, size_t,
+                       enum hid_report_type, enum hid_class_request)), "APS HID request ABI changed");
+_Static_assert(__builtin_offsetof(struct hid_device_id, bus) == 0 &&
+               __builtin_offsetof(struct hid_device_id, group) == 2 &&
+               __builtin_offsetof(struct hid_device_id, vendor) == 4 &&
+               __builtin_offsetof(struct hid_device_id, product) == 8 &&
+               __builtin_offsetof(struct hid_device_id, driver_data) == 16,
+               "APS HID ID layout changed");
+#undef PH_FIELD
 enum {
     PH_HID_SIZE = sizeof(struct hid_device),
     PH_HID_DEV = __builtin_offsetof(struct hid_device, dev),

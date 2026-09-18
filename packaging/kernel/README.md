@@ -112,6 +112,9 @@ All boot-logo image conversion, parsing and EFI file work stays in userspace.
 
 The installer adds a modules-load entry and udev access rule for reboot. This is
 not DKMS; another kernel needs a rebuild. Model and BIOS guards fail closed.
+For automatic kernel-update builds, use the separate source installer
+`scripts/install-aps-dkms.py` documented in `packaging/dkms/README.md`.
+This fixed-kernel bundle must not be installed over an APS DKMS installation.
 
 ```bash
 sudo ./uninstall.sh

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 [[ $EUID == 0 ]] || { printf '%s\n' 'Run this one-time kernel installation as root.' >&2; exit 1; }
+if [[ -d /var/lib/dkms/acer-phn16s ]]; then
+    printf '%s\n' 'APS is managed by DKMS. Use its versioned source installer, not this fixed-kernel bundle.' >&2
+    exit 1
+fi
 bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 account=${1:?Pass the normal account that should control APS}
 [[ $(id -u "$account") != 0 ]]
