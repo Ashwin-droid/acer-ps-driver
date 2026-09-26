@@ -69,14 +69,15 @@ Bare `aps lighting apply` only shows help. Positional syntax is
 ./aps logo FF00FF 60
 ./aps logo breathing 60 3
 ./aps logo neon 60 3
-./aps logo opmode 60
 ./aps logo off
 ./aps logo status
 ```
 
 Cover-logo Breathing fades through RGB and Neon smoothly cycles RGB. They do
-not support a chosen fixed color. `logo opmode` is normally off and flashes on
-Turbo presses; it is not a continuously displayed performance color. Logo
+not support a chosen fixed color. Performance flashes are temporary firmware
+indications, not selectable logo effects. Eco's flash is followed by a bounded
+kernel reapplication of the latest normal logo choice. Legacy saved opmode
+records migrate to Off while retaining all other valid preferences. Logo
 settings persist through the same user-account service. Speed is 1..5, brightness
 0..100. `logo on` means static white; use a hex color for another static color.
 

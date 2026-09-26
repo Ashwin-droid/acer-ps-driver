@@ -193,7 +193,6 @@ aps button mode \"power modes\"|hotkey
 aps turbo-led auto|manual [RRGGBB]|RRGGBB|off|status
 aps logo COLOR [brightness] | off | on | status
 aps logo breathing|neon [brightness] [speed]
-aps logo opmode [brightness]
 aps sleep status|off
 aps sleep logo static COLOR [brightness] | breathing|neon [brightness] [speed] | off
 aps gpu mux status

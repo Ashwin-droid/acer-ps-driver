@@ -22,6 +22,8 @@ mod sense_key;
 mod sleep;
 #[path = "../src/sleep_state.rs"]
 mod sleep_state;
+#[path = "../src/logo_recovery.rs"]
+mod logo_recovery;
 #[path = "../src/lid_state.rs"]
 mod lid_state;
 #[path = "../src/mux.rs"]
@@ -61,6 +63,7 @@ struct State {
     keyboard_zones: [Option<control::Light>; 4],
     generation: u64,
     sleep: sleep_state::SleepState,
+    logo_recovery: logo_recovery::LogoRecovery,
     lid: lid_state::LidState,
     mux_request: Option<(mux::Mode, i32)>,
     mux_last_ns: Option<u64>,
@@ -539,6 +542,7 @@ fn sleep_event(prepare: bool, suspend: bool) {
     let mut state = unsafe { &*pointer }.lock();
     if prepare {
         if !state.sleep.prepare() { return; }
+        state.logo_recovery.cancel();
         // These temporary hardware writes deliberately bypass cache/generation
         // updates. Userspace persistence continues to see the intended colors.
         let lighting = sleep_state::SleepLighting::new(state.sleep_logo, suspend);
@@ -599,6 +603,9 @@ fn require_open_lid(state: &mut State) -> Result<()> {
 
 fn set_profile_with_lid(profile: u8, state: &mut State) -> Result<()> {
     let result = acpi_controls::set_profile(profile);
+    let actual = if result.is_ok() { Some(u64::from(profile)) }
+        else { acpi_controls::profile().ok() };
+    state.logo_recovery.profile_changed(actual, now());
     refresh_lid(state);
     if !state.lid.allowed() {
         // Performance writes can relight the Turbo LED even on a reported error.
@@ -649,6 +656,26 @@ fn restore_rgb(state: &mut State) {
     state.sleep.completed(now(), error);
     pr_info!("acer_phn16s: wake RGB restore attempt={} status={} error={}\n",
         state.sleep.attempts, state.sleep.phase(), error);
+}
+
+fn recover_eco_logo(state: &mut State) {
+    #[cfg(aps_dev)]
+    if state.developer.active {
+        state.logo_recovery.cancel();
+        return;
+    }
+    let busy = state.sleep.sleeping || state.sleep.phase() == "restoring";
+    let Some(setting) = state.logo_recovery.setting(now(), state.logo, busy) else { return; };
+    // Confirm the current mode before replay, including changes outside APS.
+    let result = match acpi_controls::profile() {
+        Ok(6) => hardware_hid::set_logo(setting),
+        Ok(_) => { state.logo_recovery.cancel(); return; }
+        Err(error) => Err(error),
+    };
+    state.logo_recovery.completed(now(), result.is_ok());
+    // Reapplication must not change preferences or advance their generation.
+    pr_info!("acer_phn16s: Eco logo recovery attempt={} error={}\n",
+        state.logo_recovery.attempts, result.err().map_or(0, |e| e.to_errno()));
 }
 
 unsafe extern "C" fn watchdog(data: *mut kernel::ffi::c_void) -> i32 {
@@ -722,6 +749,7 @@ unsafe extern "C" fn watchdog(data: *mut kernel::ffi::c_void) -> i32 {
                 guard.lid.completed(now(), error);
                 pr_info!("acer_phn16s: lid {} lighting applied, error={}\n", guard.lid.name(), error);
             }
+            recover_eco_logo(&mut guard);
         }
         unsafe { bindings::msleep(250) };
     }
@@ -766,6 +794,7 @@ impl kernel::Module for AcerModule {
                 keyboard_zones: [None; 4],
                 generation: 0,
                 sleep: sleep_state::SleepState::default(),
+                logo_recovery: logo_recovery::LogoRecovery::default(),
                 lid: lid_state::LidState::default(),
                 mux_request: None,
                 mux_last_ns: None,

@@ -82,13 +82,20 @@ to handle firmware Turbo indication. Suspend prevents sensor access; wake checks
 the lid before restoring internal RGB. Production raw endpoints remain absent.
 
 Cover-logo writes use only target 0x83 and the verified zero zone mask. Accepted
-settings are off, static brightness/RGB, native RGB-cycling breathing/neon, and
-opmode. Brightness is 0..100, animation speed 1..5. Shifting and user-supplied
+settings are off, static brightness/RGB, and native RGB-cycling breathing/neon.
+Brightness is 0..100, animation speed 1..5. Opmode, Shifting and user-supplied
 targets, directions and report fields are rejected by the normal logo parser.
 The `logo` attribute also accepts `reapply`: under the state mutex it resubmits
 the latest cached setting. It rejects requests without a cached setting and
 refuses to interfere with an active developer session. It is not a preference
 value and cannot restore a stale userspace-supplied color.
+
+After a profile write selects Eco, the worker reapplies the latest awake logo
+after two seconds, confirming Eco with firmware readback before each attempt.
+Transport errors retry after two and five seconds, at most three attempts.
+Other modes and suspend cancel the pending recovery. It never changes the cached
+logo or preference generation, and does not run during wake restoration or a
+signed developer session. Both sysfs and Turbo-button profile changes use it.
 
 The kernel does not open preference files or implement disk parsing/save/restore.
 Those operations belong to the separate aps-state service running as the normal

@@ -68,6 +68,15 @@ impl Snapshot {
         let mut state = Self::default();
         for line in lines {
             let (key, value) = line.split_once('=').ok_or("malformed preference line")?;
+            // Old APS persisted a transient firmware indication as a logo
+            // effect. It has no recoverable base color. Migrate only this exact
+            // legacy grammar to off; never discard unrelated preferences or
+            // forward the removed command into sysfs.
+            let value = if key == "logo" && legacy_opmode(value) {
+                "off"
+            } else {
+                value
+            };
             if !valid(key, value) || state.0.insert(key.into(), value.into()).is_some() {
                 return Err(format!("invalid or duplicate preference field: {key}").into());
             }
@@ -81,6 +90,15 @@ impl Snapshot {
         }
         text
     }
+}
+fn legacy_opmode(value: &str) -> bool {
+    let Some(brightness) = value.strip_prefix("opmode ") else {
+        return false;
+    };
+    !brightness.is_empty()
+        && brightness.len() <= 3
+        && brightness.bytes().all(|b| b.is_ascii_digit())
+        && brightness.parse::<u8>().is_ok_and(|v| v <= 100)
 }
 fn private_metadata(metadata: &fs::Metadata, directory: bool) -> Result<()> {
     if metadata.uid() != uid()?
@@ -929,13 +947,7 @@ mod tests {
     }
     #[test]
     fn logo_preferences_preserve_modes_without_accepting_raw_commands() {
-        for value in [
-            "off",
-            "static 60 FF00FF",
-            "breathing 60 3",
-            "neon 40 5",
-            "opmode 60",
-        ] {
+        for value in ["off", "static 60 FF00FF", "breathing 60 3", "neon 40 5"] {
             let record =
                 Snapshot::parse(&format!("APS-USERSPACE-STATE-1\nlogo={value}\n")).unwrap();
             assert_eq!(Snapshot::parse(&record.text()).unwrap(), record);
@@ -950,6 +962,28 @@ mod tests {
         }
         assert!(Snapshot::parse("APS-USERSPACE-STATE-1\nlogo=raw a4 83\n").is_err());
         assert!(Snapshot::parse("APS-USERSPACE-STATE-1\nlogo=shifting 60 3\n").is_err());
+    }
+    #[test]
+    fn legacy_opmode_migrates_only_logo_and_still_rejects_duplicates() {
+        for brightness in [0, 60, 100] {
+            let record = Snapshot::parse(&format!("APS-USERSPACE-STATE-1\nlogo=opmode {brightness}\nsleep_logo=static 100 0000FF\nprofile=eco\nturbo_led_mode=auto\n")).unwrap();
+            assert_eq!(record.0["logo"], "off");
+            assert_eq!(record.0["sleep_logo"], "static 100 0000FF");
+            assert_eq!(record.0["profile"], "eco");
+            assert_eq!(record.0["turbo_led_mode"], "auto");
+            assert!(!record.text().contains("opmode"));
+        }
+        for line in [
+            "opmode 101",
+            "opmode -1",
+            "opmode 0 extra",
+            "opmode 0\0",
+            "auto",
+            "opmode 0\nlogo=off",
+            "off\nlogo=opmode 0",
+        ] {
+            assert!(Snapshot::parse(&format!("APS-USERSPACE-STATE-1\nlogo={line}\n")).is_err());
+        }
     }
     #[test]
     fn failed_profile_does_not_block_lighting_and_only_failures_are_retried() {

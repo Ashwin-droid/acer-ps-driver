@@ -3,7 +3,7 @@ use super::*;
 use control::Logo;
 
 pub(super) fn help() {
-    println!("Back-of-lid Predator logo\n\n  aps logo status\n  aps logo FF00FF [BRIGHTNESS]\n  aps logo static FF00FF [BRIGHTNESS]\n  aps logo on [BRIGHTNESS]             Static white\n  aps logo off\n  aps logo breathing [BRIGHTNESS] [SPEED]\n  aps logo neon [BRIGHTNESS] [SPEED]\n  aps logo opmode [BRIGHTNESS]         Normally off; flashes on Turbo\n  aps logo auto [BRIGHTNESS]           Alias for opmode\n\nBrightness: 0..100, default 60. Animation speed: 1..5, default 3.\nBreathing fades while cycling RGB; Neon cycles colors without fading dark.\nNeither animation accepts a fixed color. Static accepts six hex digits.\nTurbo may briefly interrupt an animation with a mode indication, then resume it.\nThe operating-mode flash's color mapping is not established.\n\nSettings are saved/restored by the user-account preference service. Native\neffects continue after aps exits. Status is the last accepted setting, not\na live color getter. Shifting is not supported for this logo.");
+    println!("Back-of-lid Predator logo\n\n  aps logo status\n  aps logo FF00FF [BRIGHTNESS]\n  aps logo static FF00FF [BRIGHTNESS]\n  aps logo on [BRIGHTNESS]             Static white\n  aps logo off\n  aps logo breathing [BRIGHTNESS] [SPEED]\n  aps logo neon [BRIGHTNESS] [SPEED]\n\nBrightness: 0..100, default 60. Animation speed: 1..5, default 3.\nBreathing fades while cycling RGB; Neon cycles colors without fading dark.\nNeither animation accepts a fixed color. Static accepts six hex digits.\nPerformance changes may briefly overlay a firmware mode indication.\nAfter an Eco change the kernel reapplies your latest logo setting after 2s.\n\nSettings are saved/restored by the user-account preference service. Native\neffects continue after aps exits. Status is the last accepted setting, not\na live color getter. Shifting is not supported for this logo.");
 }
 fn byte(args: &[String], index: usize, default: u8, maximum: u8, label: &str) -> Result<u8> {
     let value = match args.get(index) {
@@ -31,9 +31,7 @@ pub(super) fn parse(args: &[String]) -> Result<Logo> {
             brightness: byte(rest, 1, 60, 100, "Brightness")?,
             rgb: rgb(&rest[0])?,
         },
-        "auto" | "opmode" if rest.len() <= 1 => Logo::OperatingMode {
-            brightness: byte(rest, 0, 60, 100, "Brightness")?,
-        },
+        "auto" | "opmode" => return Err("Logo opmode/auto was removed: performance flashes are temporary firmware indications. Choose static, breathing, neon, or off.".into()),
         "breathing" | "neon" if rest.len() <= 2 => {
             if rest
                 .first()
@@ -58,7 +56,7 @@ pub(super) fn parse(args: &[String]) -> Result<Logo> {
         },
         _ => {
             return Err(
-                "Use aps logo COLOR, off, breathing, neon, or opmode; see aps logo --help".into(),
+                "Use aps logo COLOR, off, breathing, or neon; see aps logo --help".into(),
             )
         }
     };
@@ -96,9 +94,6 @@ pub(super) fn run(args: &[String]) -> Result<()> {
     match setting {
         Logo::Breathing { .. } => println!("Native RGB-cycling Breathing; color is not fixed."),
         Logo::Neon { .. } => println!("Native continuous RGB color cycling."),
-        Logo::OperatingMode { .. } => {
-            println!("Normally off; firmware flashes a color on a Turbo-button event.")
-        }
         _ => (),
     }
     Ok(())
@@ -119,8 +114,6 @@ mod tests {
             vec!["off"],
             vec!["breathing", "60", "3"],
             vec!["neon"],
-            vec!["auto", "40"],
-            vec!["opmode"],
         ] {
             let setting = p(&args).unwrap();
             assert_eq!(control::logo(setting.to_string().as_bytes()), Some(setting));
@@ -143,6 +136,9 @@ mod tests {
             vec!["breathing", "60", "0"],
             vec!["neon", "60", "6"],
             vec!["opmode", "-1"],
+            vec!["opmode"],
+            vec!["opmode", "0"],
+            vec!["auto", "40"],
             vec!["static", "GGGGGG"],
             vec!["raw", "a4"],
             vec!["83", "2", "255"],

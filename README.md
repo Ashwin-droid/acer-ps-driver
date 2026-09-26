@@ -170,15 +170,21 @@ without a developer key, sudo or polkit for each change:
     aps logo off
     aps logo breathing 60 3
     aps logo neon 60 3
-    aps logo opmode 60
 
 `on` selects static white. Static colors accept six hex digits; brightness is
 0..100 and defaults to 60. Breathing and Neon use native speeds 1..5, default 3.
 Breathing fades while cycling RGB; Neon cycles colors without fading dark.
-They do not accept a fixed color. `opmode` (alias `auto`) normally leaves the
-logo off and flashes a firmware-selected color when Turbo is pressed. Turbo
-may also briefly interrupt Breathing and then resume it; no userspace animation
-loop handles that indication. The flash color-to-performance mapping is unverified.
+They do not accept a fixed color. Performance changes may temporarily overlay a
+firmware mode indication on any normal logo effect. After selecting Eco, the
+kernel waits two seconds and reapplies the latest awake logo setting, including
+Off. Failed recovery retries after two and five seconds, at most three attempts.
+Changing away from Eco or preparing for sleep cancels this recovery; sleep and
+wake retain their own lighting policy. Recovery does not modify saved preferences.
+
+`opmode` and its `auto` alias are no longer persistent logo choices. Old saved
+`logo=opmode BRIGHTNESS` records migrate to Off without discarding the other
+preferences. There is no earlier color in those records to recover automatically.
+Turbo LED Auto remains available and is unrelated to the removed logo choice.
 
 The account's preference service saves/restores the logo setting. `status` shows
 the last accepted setting, not the current physical color or a temporary Turbo
@@ -426,7 +432,7 @@ All attributes are under /sys/class/misc/acer-phn16s/.
 | turbo_led | Read/write | Hex RGB or off; read last setting, including auto |
 | turbo_led_mode | Read/write | auto or manual |
 | turbo_led_capabilities | Read | Fixed key-LED target, zone count, native-effect mask |
-| logo | Read/write | off; static BRIGHTNESS RGB; breathing/neon BRIGHTNESS SPEED; opmode BRIGHTNESS; reapply latest cached setting |
+| logo | Read/write | off; static BRIGHTNESS RGB; breathing/neon BRIGHTNESS SPEED; reapply latest cached setting |
 | logo_capabilities | Read | Cover-logo target 83, one zone, native-effect mask |
 | sleep_status | Read | awake/sleeping/restoring/error, sleep cycles, restore attempts, last errno |
 | sleep_logo | Read/write | Next-suspend logo: off; static BRIGHTNESS RGB; breathing/neon BRIGHTNESS SPEED. Memory-only until suspend; default off |

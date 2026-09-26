@@ -54,15 +54,12 @@ pub(crate) enum Logo {
     Static { brightness: u8, rgb: [u8; 3] },
     Breathing { brightness: u8, speed: u8 },
     Neon { brightness: u8, speed: u8 },
-    OperatingMode { brightness: u8 },
 }
 impl Logo {
     pub(crate) fn valid(self) -> bool {
         match self {
             Self::Off => true,
-            Self::Static { brightness, .. } | Self::OperatingMode { brightness } => {
-                brightness <= 100
-            }
+            Self::Static { brightness, .. } => brightness <= 100,
             Self::Breathing { brightness, speed } | Self::Neon { brightness, speed } => {
                 brightness <= 100 && (1..=5).contains(&speed)
             }
@@ -82,7 +79,6 @@ impl core::fmt::Display for Logo {
                 write!(out, "breathing {} {}", brightness, speed)
             }
             Self::Neon { brightness, speed } => write!(out, "neon {} {}", brightness, speed),
-            Self::OperatingMode { brightness } => write!(out, "opmode {}", brightness),
         }
     }
 }
@@ -119,7 +115,6 @@ pub(crate) fn logo(bytes: &[u8]) -> Option<Logo> {
                 }
             }
         }
-        "opmode" => Logo::OperatingMode { brightness },
         _ => return None,
     };
     (parts.next().is_none() && setting.valid()).then_some(setting)
@@ -127,10 +122,7 @@ pub(crate) fn logo(bytes: &[u8]) -> Option<Logo> {
 
 // Sleep has no operating-mode flashes, software animations, or raw commands.
 pub(crate) fn sleep_logo(bytes: &[u8]) -> Option<Logo> {
-    match logo(bytes)? {
-        Logo::OperatingMode { .. } => None,
-        setting => Some(setting),
-    }
+    logo(bytes)
 }
 
 // A stateful command, deliberately NOT a serializable Logo preference.
@@ -466,7 +458,6 @@ mod tests {
             "static 0 000000",
             "breathing 100 1",
             "neon 60 5",
-            "opmode 60",
         ] {
             let setting = logo(text.as_bytes()).unwrap();
             assert!(setting.valid());
@@ -482,6 +473,9 @@ mod tests {
             "breathing 60 0",
             "neon 60 6",
             "opmode 60 1",
+            "opmode 0",
+            "opmode 60",
+            "auto",
             "off now",
             "a4 83 2",
             "breathing 60 3 FF0000",

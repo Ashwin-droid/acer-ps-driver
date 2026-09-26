@@ -62,7 +62,6 @@ pub(crate) fn logo_report(setting: crate::control::Logo) -> Option<[u8; 11]> {
         Logo::Static { brightness, rgb } => (2, brightness, 0, 0, rgb),
         Logo::Breathing { brightness, speed } => (4, brightness, speed, 1, [0; 3]),
         Logo::Neon { brightness, speed } => (5, brightness, speed, 1, [0; 3]),
-        Logo::OperatingMode { brightness } => (6, brightness, 0, 0, [0; 3]),
     };
     // Exact CoverLogo target and zero zone mask from AcerHIDLogoLEDController.
     // Native animations cycle colors; no fixed-color animation is promised.
@@ -85,17 +84,11 @@ mod tests {
             .unwrap(),
             [0xa4, 0x83, 2, 60, 0, 0, 255, 0, 255, 0, 0]
         );
-        for text in [
-            "off",
-            "static 100 0088FF",
-            "breathing 60 3",
-            "neon 60 3",
-            "opmode 60",
-        ] {
+        for text in ["off", "static 100 0088FF", "breathing 60 3", "neon 60 3"] {
             let packet = logo_report(crate::control::logo(text.as_bytes()).unwrap()).unwrap();
             assert_eq!(&packet[..2], &[0xa4, 0x83]);
             assert_eq!(&packet[9..], &[0, 0]);
-            assert!(matches!(packet[2], 1 | 2 | 4 | 5 | 6));
+            assert!(matches!(packet[2], 1 | 2 | 4 | 5));
         }
         assert!(logo_report(Logo::Static {
             brightness: 101,
