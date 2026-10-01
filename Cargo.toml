@@ -10,6 +10,7 @@ crossterm = "=0.28.1"
 ratatui = "=0.29.0"
 ratatui-image = { version = "=8.1.1", default-features = false, features = ["crossterm"] }
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "gif", "png"] }
+gif = "=0.14.2"
 libc = "0.2"
 tempfile = "3"
 

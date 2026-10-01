@@ -2,10 +2,21 @@
 
 System Boot Effect: `aps boot status`, `aps boot effects on|off`, and
 `aps boot logo pick [DIRECTORY] | set FILE | prepare FILE OUTPUT | status | reset`.
-The picker previews highlighted/hovered images in a responsive Ratatui-image pane
+The picker previews highlighted/hovered images and videos in a Ratatui-image pane
 before Enter opens the crop editor. FFmpeg handles automatic center crop
-and resize to 1024x640. Input JPEG/PNG/GIF, output JPEG or animated GIF. GIF output
-is limited to 30 seconds at 20 fps; output over 35 MiB is rejected.
+and resize up to 1024x640. Input JPEG/PNG/GIF, MP4/M4V/MOV, MKV/WebM or AVI;
+output JPEG or animated GIF. Videos lose audio and use their first 30 seconds.
+`aps boot logo prepare clip.mp4 prepared.gif` converts without installation;
+`aps boot logo set clip.mp4` converts and requests authorization to install.
+The picker shows the first frame and supports the same crop editor for videos.
+Phone-video rotation is applied before cropping.
+
+GIF conversion tries 20/10/5/2 fps at 1024x640, then 1 fps at 768x480. It picks
+the first result within Acer's 35,000,000-byte limit and APS's additional 64 MiB
+decoded-frame-rectangle budget. Input is at most 100 MiB. URLs, playlists,
+symlinks and audio-only inputs are rejected. Both the CLI and elevated helper
+validate the final GIF; the helper never receives or decodes source video.
+These bounds reduce resource use but do not guarantee firmware bug-freedom.
 Run conversion/picker as the normal user. Changes request Polkit authorization
 for the separate root-owned `aps-boot` helper. The helper must be installed with
 `sudo ./install-boot-helper.sh`; it needs the system's mtools utilities. It is

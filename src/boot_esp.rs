@@ -526,6 +526,45 @@ mod tests {
         .is_err());
         assert!(change(&esp, dir.path(), Some(b"bad image")).is_err());
         assert_eq!(esp.present().unwrap(), [true, false]);
+        // Full video -> GIF -> validated transactional ESP path, on this
+        // disposable FAT image only. No real partition or firmware writes.
+        let video = dir.path().join("source.mp4");
+        boot_media::run_ffmpeg(
+            &[
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                "testsrc2=size=64x40:rate=10".into(),
+                "-t".into(),
+                "0.3".into(),
+                "-c:v".into(),
+                "mpeg4".into(),
+                video.as_os_str().to_owned(),
+            ],
+            std::time::Duration::from_secs(15),
+        )
+        .unwrap();
+        let prepared = dir.path().join("prepared.gif");
+        boot_media::prepare(&video, &prepared, boot_media::Crop::default()).unwrap();
+        let gif = fs::read(prepared).unwrap();
+        let backup = change(&esp, dir.path(), Some(&gif)).unwrap().unwrap();
+        assert_eq!(fs::read(backup.join("AcerLogo.jpg")).unwrap(), bytes);
+        assert_eq!(esp.present().unwrap(), [false, true]);
+        let exported = dir.path().join("installed.gif");
+        esp.export("AcerLogo.gif", &exported).unwrap();
+        assert_eq!(fs::read(exported).unwrap(), gif);
+        assert!(change_with_hooks(
+            &esp,
+            dir.path(),
+            Some(&bytes),
+            || Ok(()),
+            || Err("injected effects failure after GIF replacement".into())
+        )
+        .is_err());
+        assert_eq!(esp.present().unwrap(), [false, true]);
+        let restored = dir.path().join("restored.gif");
+        esp.export("AcerLogo.gif", &restored).unwrap();
+        assert_eq!(fs::read(restored).unwrap(), gif);
         change(&esp, dir.path(), None).unwrap();
         assert_eq!(esp.present().unwrap(), [false, false]);
         assert!(change(&esp, dir.path(), None).unwrap().is_none());

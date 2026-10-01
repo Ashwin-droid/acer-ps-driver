@@ -35,21 +35,15 @@ impl Drop for Screen {
 struct Thumbnail {
     image: image::DynamicImage,
     dimensions: (u32, u32),
-    gif: bool,
+    animated: bool,
 }
 fn thumbnail(path: &Path) -> Result<Thumbnail> {
     let (bytes, format, dimensions) = boot_media::source(path)?;
-    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(16384);
-    limits.max_image_height = Some(16384);
-    limits.max_alloc = Some(128 * 1024 * 1024);
-    reader.limits(limits);
-    let image = reader.decode()?.thumbnail(640, 480);
+    let image = boot_media::preview(&bytes, format)?.thumbnail(640, 480);
     Ok(Thumbnail {
         image,
         dimensions,
-        gif: format == image::ImageFormat::Gif,
+        animated: format.animated(),
     })
 }
 #[derive(Default)]
@@ -155,15 +149,7 @@ fn files(dir: &Path) -> Result<Vec<PathBuf>> {
         let entry = entry?;
         let kind = entry.file_type()?;
         let path = entry.path();
-        if kind.is_dir()
-            || (kind.is_file()
-                && path.extension().is_some_and(|e| {
-                    matches!(
-                        e.to_string_lossy().to_ascii_lowercase().as_str(),
-                        "jpg" | "jpeg" | "png" | "gif"
-                    )
-                }))
-        {
+        if kind.is_dir() || (kind.is_file() && boot_media::supported_extension(&path)) {
             children.push(path);
         }
     }
@@ -201,7 +187,7 @@ pub(crate) fn pick(start: &Path) -> Result<Option<(tempfile::TempDir, PathBuf)>>
     let mut pending = None;
     let mut highlight_time = Instant::now();
     let mut browse_image: Option<StatefulProtocol> = None;
-    let mut preview_text = String::from("Highlight an image to preview it");
+    let mut preview_text = String::from("Highlight an image or video to preview it");
     let mut list_area = Rect::default();
     let chosen = loop {
         let current = selected
@@ -219,7 +205,7 @@ pub(crate) fn pick(start: &Path) -> Result<Option<(tempfile::TempDir, PathBuf)>>
                     pending = Some(path.clone());
                     "Loading preview…".into()
                 }
-                None => "No images in this folder".into(),
+                None => "No images or videos in this folder".into(),
             };
             highlighted = current;
         }
@@ -235,7 +221,11 @@ pub(crate) fn pick(start: &Path) -> Result<Option<(tempfile::TempDir, PathBuf)>>
                         "{}×{}{}",
                         thumb.dimensions.0,
                         thumb.dimensions.1,
-                        if thumb.gif { " · GIF first frame" } else { "" }
+                        if thumb.animated {
+                            " · animation first frame"
+                        } else {
+                            ""
+                        }
                     );
                     browse_image = Some(picker.new_resize_protocol(thumb.image));
                 }
@@ -253,7 +243,7 @@ pub(crate) fn pick(start: &Path) -> Result<Option<(tempfile::TempDir, PathBuf)>>
             f.render_widget(
                 Paragraph::new(clean(&dir.display().to_string())).block(
                     Block::default()
-                        .title(" Boot logo · choose image ")
+                        .title(" Boot logo · choose image/video ")
                         .borders(Borders::ALL),
                 ),
                 chunks[0],
@@ -364,24 +354,9 @@ pub(crate) fn pick(start: &Path) -> Result<Option<(tempfile::TempDir, PathBuf)>>
     let work = tempfile::tempdir()?;
     let (bytes, format, dimensions) = boot_media::source(&chosen)?;
     let input = work.path().join("source");
-    fs::write(&input, bytes)?;
-    let preview = work.path().join("preview.png");
-    terminal.draw(|f| f.render_widget(Paragraph::new("Preparing image preview…"), f.area()))?;
-    boot_media::run_ffmpeg(
-        &[
-            "-protocol_whitelist".into(),
-            "file,pipe".into(),
-            "-i".into(),
-            input.clone().into_os_string(),
-            "-frames:v".into(),
-            "1".into(),
-            "-vf".into(),
-            "scale=1024:1024:force_original_aspect_ratio=decrease".into(),
-            preview.clone().into_os_string(),
-        ],
-        Duration::from_secs(30),
-    )?;
-    let original = image::open(preview)?;
+    fs::write(&input, &bytes)?;
+    terminal.draw(|f| f.render_widget(Paragraph::new("Preparing media preview…"), f.area()))?;
+    let original = boot_media::preview(&bytes, format)?.thumbnail(1024, 1024);
     let mut crop = Crop::default();
     let mut image = None;
     let mut changed = true;
@@ -400,7 +375,7 @@ pub(crate) fn pick(start: &Path) -> Result<Option<(tempfile::TempDir, PathBuf)>>
             let chunks=Layout::vertical([Constraint::Length(3),Constraint::Min(3),Constraint::Length(4)]).split(f.area());
             f.render_widget(Paragraph::new(format!("{} · {}×{} → {WIDTH}×{HEIGHT} · zoom {}%",clean(&chosen.file_name().unwrap_or_default().to_string_lossy()),dimensions.0,dimensions.1,crop.zoom)).block(Block::default().title(" Boot logo · crop preview ").borders(Borders::ALL)),chunks[0]);
             if let Some(state)=image.as_mut() { f.render_stateful_widget(StatefulImage::default(),chunks[1],state); }
-            let animation=if format==image::ImageFormat::Gif { "GIF preview is the first frame; export keeps animation, up to 30s at 20fps." } else { "Automatic center crop. Export: JPEG." };
+            let animation=if format.animated() { "First-frame preview. Export: GIF, first 30s, up to 20fps; auto-fit to byte/frame budgets." } else { "Automatic center crop. Export: JPEG." };
             f.render_widget(Paragraph::new(format!("{animation}\nArrows move crop   +/- zoom   0 reset\nEnter prepare & authorize install   q/Esc cancel")),chunks[2]);
         })?;
         if !event::poll(Duration::from_millis(100))? {
@@ -476,6 +451,32 @@ mod tests {
         jobs.stopped = true;
         jobs.finish(9, Err("after cancellation".into()));
         assert!(jobs.ready.is_none());
+    }
+    #[test]
+    fn browser_lists_video_and_previews_its_first_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clip.webm");
+        boot_media::run_ffmpeg(
+            &[
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                "testsrc2=size=80x48:rate=10".into(),
+                "-t".into(),
+                "0.2".into(),
+                "-c:v".into(),
+                "libvpx-vp9".into(),
+                path.as_os_str().to_owned(),
+            ],
+            Duration::from_secs(15),
+        )
+        .unwrap();
+        let list = files(dir.path()).unwrap();
+        assert!(list.contains(&path));
+        let thumb = thumbnail(&path).unwrap();
+        assert_eq!(thumb.dimensions, (80, 48));
+        assert!(thumb.animated);
+        assert_eq!((thumb.image.width(), thumb.image.height()), (640, 384));
     }
     #[test]
     fn loader_previews_images_and_reports_bad_files_without_affecting_browser() {

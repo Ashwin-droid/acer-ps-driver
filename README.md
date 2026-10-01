@@ -241,6 +241,8 @@ aps boot effects off
 aps boot logo pick ~/Pictures
 aps boot logo set ~/Pictures/logo.png
 aps boot logo prepare ~/Pictures/logo.png ./prepared.jpg
+aps boot logo prepare ~/Videos/clip.mp4 ./prepared.gif
+aps boot logo set ~/Videos/clip.webm
 aps boot logo status
 aps boot logo reset
 ```
@@ -257,18 +259,38 @@ in the ordinary user preferences.
 The Ratatui/ratatui-image picker previews the highlighted file before opening it,
 including mouse hover and keyboard selection. The preview sits beside the file
 list, or below it in narrow terminals. Decoding is debounced and runs in a single
-background worker, with stale results discarded. GIF browsing shows the first frame.
+background worker, with stale results discarded. GIF/video browsing shows the first frame.
 Enter opens the separate crop editor.
 Arrows move the crop, +/- zoom, 0 restores the automatic center crop, Enter prepares
-and requests installation authorization, and q/Esc/Ctrl-C cancel. The GIF preview
+and requests installation authorization, and q/Esc/Ctrl-C cancel. The GIF/video preview
 shows its first frame. Rendering uses the terminal's supported image protocol,
 with colored half-block fallback. Conversion uses FFmpeg as the normal user.
-JPEG/PNG become JPEG. GIFs remain animated at 20 fps, limited to the first 30 seconds.
-Output is 1024x640, 40% of this model's 2560x1600 panel, matching the PS size rule.
-Input is limited to 100 MiB / 64 million pixels; prepared output must be below
-35 MiB. Oversized output is rejected, not installed. `prepare` only exports a
-new local file and never authorizes or touches the ESP; existing output files
-are not overwritten.
+JPEG/PNG become JPEG. GIF and MP4/M4V/MOV, MKV/WebM or AVI become animated GIF,
+limited to the first 30 seconds with audio removed. Phone-video rotation is
+applied before preview/crop. The output starts at 1024x640, 40% of this model's
+2560x1600 panel, matching the PS dimension rule.
+
+Conversion tries 20, 10, 5 and 2 fps at 1024x640, then 1 fps at 768x480 if needed.
+The first candidate that passes all checks wins; APS reports its size and FPS.
+The two output budgets are distinct:
+
+- Acer's PS 5.1.514 code rejects sizes above **35,000,000 bytes**, not 35 MiB.
+- APS additionally caps the sum of GIF image-descriptor `width * height * 4`
+  at **64 MiB**. The inspected firmware retains decoded frame rectangles, so
+  a small compressed file alone does not bound playback memory. This is an APS
+  policy, not an Acer guarantee, and excludes firmware overhead/scratch space.
+
+Input is limited to regular local files of 100 MiB / 64 million pixels. Container
+signatures select fixed demuxers; URLs, playlists, audio-only files, symlinks and
+external MOV references are not accepted. FFmpeg runs without privilege, with
+bounded threads, decoder pixel limits, output bytes and conversion timeouts.
+GIF validation also checks decoding, dimensions, frame count and duration in the
+root helper before writing. These checks do not prove the firmware bug-free.
+
+`prepare` only exports a new local file and never authorizes or touches the ESP;
+existing output files are not overwritten. `set` and the picker pass the prepared
+JPEG/GIF, never the source video, to the existing elevated writer. Firmware
+playback has no audio and may end before the whole clip if boot continues.
 
 Logo files stay entirely in userspace. `aps-boot`, installed root-owned under
 `/usr/local/libexec`, receives Polkit authorization only after preparation. It
