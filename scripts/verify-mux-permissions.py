@@ -9,13 +9,13 @@ assert os.geteuid() == 0, "Run this diagnostic as root"
 account = pwd.getpwnam("ashwinmhaskar")
 assert account.pw_uid != 0
 base = Path("/sys/class/misc/acer-phn16s")
-before = ((base / "mux_mode").read_text(), (base / "mux_request").read_text())
-mode = (base / "mux_mode").stat()
+before = ((base / "gpu_mux_mode").read_text(), (base / "gpu_mux_request").read_text())
+mode = (base / "gpu_mux_mode").stat()
 assert mode.st_uid == 0 and mode.st_mode & 0o777 == 0o640
 
 # Prove the kernel checks the actual writer, even with an fd opened by root.
 # All payloads here are invalid as a second safeguard against any mode change.
-fd = os.open(base / "mux_mode", os.O_WRONLY)
+fd = os.open(base / "gpu_mux_mode", os.O_WRONLY)
 try:
     child = os.fork()
     if child == 0:
@@ -39,7 +39,7 @@ print("PASS: kernel rejects unprivileged writer even through a root-opened fd")
 for payload in [b"intel", b"hybrid", b"0", b"1", b"2", b"3", b"0x302",
                 b"auto extra", b"auto\0", b"nvidia; reboot", b"optimus\nraw",
                 b"AUTO", b"LCD_OVERDRIVE", b"\xff", b"x" * 129]:
-    fd = os.open(base / "mux_mode", os.O_WRONLY)
+    fd = os.open(base / "gpu_mux_mode", os.O_WRONLY)
     try:
         try:
             os.write(fd, payload)
@@ -49,7 +49,7 @@ for payload in [b"intel", b"hybrid", b"0", b"1", b"2", b"3", b"0x302",
             raise AssertionError("malformed root request accepted")
     finally:
         os.close(fd)
-after = ((base / "mux_mode").read_text(), (base / "mux_request").read_text())
+after = ((base / "gpu_mux_mode").read_text(), (base / "gpu_mux_request").read_text())
 assert before == after, "diagnostic changed MUX state"
 print("PASS: malformed root requests rejected; firmware selection/request record unchanged")
 

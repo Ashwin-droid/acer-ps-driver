@@ -1,6 +1,22 @@
 use std::process::Command;
 
 #[test]
+fn fan_duration_arguments_are_rejected_before_hardware_access() {
+    for args in [
+        vec!["fans", "maximum", "60"],
+        vec!["fans", "manual", "55", "65", "60"],
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_aps"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("Invalid fans command"));
+        assert!(!String::from_utf8_lossy(&result.stdout).contains("Fan setting applied"));
+    }
+}
+
+#[test]
 fn help_paths_never_apply_a_default_effect() {
     for args in [
         vec!["lighting"],

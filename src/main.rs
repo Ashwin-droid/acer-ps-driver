@@ -4,6 +4,7 @@ mod boot_picker;
 mod boot_policy;
 mod control;
 mod gpu;
+mod interface;
 mod lid_state;
 mod lighting;
 mod logo;
@@ -11,6 +12,7 @@ mod mux;
 mod protocol;
 mod sleep;
 mod sysfs;
+mod sysfs_codec;
 mod timeout;
 
 use protocol::*;
@@ -172,15 +174,15 @@ Quick examples:
   aps lighting apply breathing 80 2
   aps keyboard shifting 100 9
   aps lighting apply shifting 100
-  aps fans maximum 60
+  aps fans maximum
   aps keyboard timeout on
 
 Commands:
 aps status
 aps profile quiet|balanced|performance|turbo|eco
 aps fans auto
-aps fans maximum [seconds]
-aps fans manual <cpu 40..100> <gpu 40..100> [seconds]
+aps fans maximum
+aps fans manual <cpu 40..100> <gpu 40..100>
 aps keyboard info
 aps keyboard static <RRGGBB[,RRGGBB,...]> [brightness 0..100]
 aps keyboard breathing|neon|wave [brightness 0..100] [speed 0..9]
@@ -210,9 +212,9 @@ Detailed help: aps lighting --help, aps fans --help, aps keyboard --help.
 Lighting examples and speed units: aps lighting apply --help.
 
 Lighting and ordinary controls run as your normal user after installation. MUX writes require root.
-Fan maximum/manual sessions last 60 seconds by default. A kernel lease restores Auto
-within about five seconds after a stopped or crashed client.
-Fans can take several seconds to ramp up; keep the fan command running.
+Fan commands apply once and exit. No timer, lease, or automatic reset on exit.
+Use aps fans auto to return to automatic control. Firmware may change fan settings
+on performance or power transitions; fans can take several seconds to ramp up.
 Only this exact model, board and BIOS are accepted. MUX changes require restart; no LCD overdrive commands exist."
     );
 }
@@ -227,7 +229,7 @@ fn topic_help(topic: &str) {
         "button" => println!("Turbo button\n\n  aps button status\n  aps button mode \"power modes\"\n  aps button mode hotkey\n\nPower modes: Quiet -> Balanced -> Performance -> Turbo -> Eco.\nOn battery, Performance/Turbo are skipped. Hotkey emits F14 press/release.\nThe user-account preference service restores this setting after reboot.\nPredatorSense always emits F15. Press counters reset on module reload."),
         "preferences" => println!("User-account preferences\n\n  aps preferences status\n\naps-state saves/restores active settings in ~/.local/state/aps/ as your account.\nThe kernel validates sysfs writes but does not open or parse preference files."),
         "lighting" => lighting::help(None),
-        "fans" => println!("Fan control\n\n  aps fans auto\n  aps fans maximum [SECONDS]\n  aps fans manual CPU_PERCENT GPU_PERCENT [SECONDS]\n\nExamples:\n  aps fans maximum 60\n  aps fans manual 55 65 300\n\nPercentages: 40..100. Duration: 1..86400 seconds, default 60.\nKeep the process running during Maximum/manual control. Fans can take several\nseconds to ramp up. When the command ends, APS requests Auto. If APS crashes\nor stalls, the five-second kernel lease expires and the kernel requests Auto."),
+        "fans" => println!("Fan control\n\n  aps fans auto\n  aps fans maximum\n  aps fans manual CPU_PERCENT GPU_PERCENT\n\nExample: aps fans manual 55 65\n\nPercentages: 40..100. Commands apply once and exit; there is no duration,\nlease, renewal loop or exit/suspend/unload reset. Use aps fans auto to return\nto automatic control. Firmware may change settings on power/profile transitions.\nFans can take several seconds to ramp up. Fan settings are not restored at boot."),
         "profile" => println!("Performance mode\n\n  aps profile quiet|balanced|performance|turbo|eco\n\nExample: aps profile balanced\nPerformance and Turbo require AC power. Changes are checked by firmware readback."),
         "keyboard" => println!("Keyboard controls\n\n  aps keyboard info\n  aps keyboard timeout get|on|off\n  aps keyboard off\n  aps keyboard static COLOR[,COLOR,...] [BRIGHTNESS]\n  aps keyboard breathing|neon|wave [BRIGHTNESS] [SPEED]\n  aps keyboard shifting|zoom|meteor|twinkling [BRIGHTNESS] [SPEED]\n\nOnly Static and the userspace Strobe effect accept colors. Wave also accepts --direction left|right.\nOther effects use their firmware/generated palettes.\nExamples:\n  aps keyboard breathing 80 2\n  aps keyboard shifting 100 9\n  aps keyboard zoom 60 3\n\nThese are aliases for aps lighting apply EFFECT; options and defaults match.\nFor preset recipes and all settings, use aps lighting --help."),
         _ => help(),
@@ -380,48 +382,23 @@ fn run() -> Result<()> {
             Ok(())
         }
         Some("fans") if args.len() >= 2 => {
-            let (request, value, duration) = match args[1].as_str() {
-                "auto" if args.len() == 2 => (SET_FANS, 1, 0),
-                "maximum" if args.len() <= 3 => (
-                    SET_FANS,
-                    2,
-                    args.get(2).map(|s| s.parse()).transpose()?.unwrap_or(60u64),
-                ),
-                "manual" if (4..=5).contains(&args.len()) => {
+            let (request, value) = match args[1].as_str() {
+                "auto" if args.len() == 2 => (SET_FANS, 1),
+                "maximum" if args.len() == 2 => (SET_FANS, 2),
+                "manual" if args.len() == 4 => {
                     let cpu: u8 = args[2].parse()?;
                     let gpu: u8 = args[3].parse()?;
                     if fan_speed(false, cpu).is_none() || fan_speed(true, gpu).is_none() {
                         return Err("Manual fans must be between 40 and 100 percent".into());
                     }
-                    (
-                        SET_MANUAL,
-                        cpu as u64 | ((gpu as u64) << 8),
-                        args.get(4).map(|s| s.parse()).transpose()?.unwrap_or(60u64),
-                    )
+                    (SET_MANUAL, cpu as u64 | ((gpu as u64) << 8))
                 }
                 _ => return Err("Invalid fans command; see --help".into()),
             };
-            if (request != SET_FANS || value != 1) && (duration == 0 || duration > 86400) {
-                return Err("Session duration must be 1..86400 seconds".into());
-            }
             let file = kernel_device()?;
             call(&file, request, value)?;
             status(&file)?;
-            println!("Fan setting accepted for {duration}s; the kernel restores Auto if lease renewal stops.");
-            for elapsed in 0..duration {
-                thread::sleep(Duration::from_secs(1));
-                if elapsed + 1 < duration && (elapsed + 1) % 2 == 0 {
-                    call(&file, request, value)?;
-                }
-                if elapsed + 1 == duration {
-                    status(&file)?;
-                }
-            }
-            // Explicit restore reports errors; the kernel lease also expires if this process dies.
-            if duration > 0 {
-                call(&file, SET_FANS, 1)?;
-                println!("Fans returned to Auto.");
-            }
+            println!("Fan setting applied. No timer or lease; use aps fans auto to return to automatic control.");
             Ok(())
         }
         Some("keyboard") if args.len() >= 2 => {

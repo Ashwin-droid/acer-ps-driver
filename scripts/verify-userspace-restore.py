@@ -5,7 +5,7 @@ import subprocess
 import time
 
 base=Path('/sys/class/misc/acer-phn16s')
-names=('profile','button_mode','keyboard_state','keyboard_timeout','turbo_led_mode','turbo_led_manual','logo')
+names=('performance_mode','turbo_button_mode','keyboard_lighting','keyboard_backlight_timeout_seconds','turbo_lighting','cover_lighting')
 def snapshot():
     return {name:(base/name).read_text() for name in names}
 expected=snapshot()

@@ -56,7 +56,7 @@ normal user to install it to `~/.local/bin/aps`.
 ```bash
 ./aps status
 ./aps profile balanced
-./aps fans manual 55 65 60
+./aps fans manual 55 65
 ./aps keyboard timeout on
 ./aps lighting effects
 ./aps lighting apply breathing 80 2
@@ -155,9 +155,14 @@ live in `$XDG_CONFIG_HOME/aps/profiles`, or `~/.config/aps/profiles`.
 
 Native effects use speed 0–9 and continue after the process exits. Strobe uses
 flashes/sec; rainbow uses seconds/cycle. Those effects are generated in userspace.
-Fan overrides require lease renewals; the kernel requests Auto within about five
-seconds after renewal stops. A crash or modified CLI does not bypass the kernel's
-independent request validation.
+Fan commands apply once and exit. There are no leases, renewal loops or duration
+arguments; use `aps fans auto` to return to Auto. Firmware may still change fan
+settings on power/profile transitions. Kernel request validation is unchanged.
+
+DKMS 0.4.0 uses the new same-file read/write ABI documented in the main README.
+Old sysfs filenames are removed. Install the CLI, aps-state, permission rule and
+module together. Existing account-owned disk preferences keep their validated
+format and are translated to the new ABI; no root-owned preference store is added.
 
 Linux x86-64; uses system libc and libgcc_s. No module or Secure Boot key material
 is included. The kernel installer is a separate artifact.

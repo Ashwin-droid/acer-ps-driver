@@ -8,21 +8,21 @@ for attempt in {1..80}; do
     [[ -f "$base/preferences_generation" ]] && break
     sleep 0.025
 done
-for name in dev_mode dev_challenge dev_probe sleep_status lid_state lid_status mux_request; do
+for name in dev_mode dev_challenge dev_probe sleep_status lid_state lid_status gpu_mux_request; do
     if [[ -f "$base/$name" ]]; then
         chown "root:$access_group" "$base/$name"
         if [[ "$name" == dev_probe ]]; then chmod 0660 "$base/$name"; else chmod 0440 "$base/$name"; fi
     fi
 done
-for name in cpu_fan_rpm gpu_fan_rpm keyboard_capabilities fan_lease_ms button_presses button_error turbo_led_capabilities keyboard_state turbo_led_manual sense_presses preferences_generation logo_capabilities; do
+for name in cpu_fan_rpm gpu_fan_rpm keyboard_lighting_capabilities turbo_button_presses turbo_button_error turbo_lighting_capabilities predatorsense_button_presses preferences_generation cover_lighting_capabilities; do
     chown "root:$access_group" "$base/$name"
     chmod 0440 "$base/$name"
 done
-for name in profile fan_control keyboard_effect keyboard_timeout button_mode turbo_led turbo_led_mode logo sleep_logo; do
+for name in performance_mode fan_control keyboard_lighting keyboard_backlight_timeout_seconds turbo_button_mode turbo_lighting cover_lighting sleep_cover_lighting; do
     chown "root:$access_group" "$base/$name"
     chmod 0660 "$base/$name"
 done
-chown "root:$access_group" "$base/mux_mode"
-chmod 0640 "$base/mux_mode"
+chown "root:$access_group" "$base/gpu_mux_mode"
+chmod 0640 "$base/gpu_mux_mode"
 chown "root:$access_group" "$base/boot_effects"
 chmod 0640 "$base/boot_effects"

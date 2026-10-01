@@ -11,7 +11,6 @@ fn path(name: &str) -> Result<PathBuf> {
             | "keyboard_capabilities"
             | "keyboard_effect"
             | "keyboard_timeout"
-            | "fan_lease_ms"
             | "button_mode"
             | "button_presses"
             | "button_error"
@@ -33,13 +32,17 @@ fn path(name: &str) -> Result<PathBuf> {
     ) {
         return Err("Unknown sysfs control".into());
     }
-    Ok(PathBuf::from(ROOT).join(name))
+    Ok(PathBuf::from(ROOT).join(sysfs_codec::attribute(name)))
 }
 pub(super) fn read(name: &str) -> Result<String> {
-    Ok(fs::read_to_string(path(name)?)?)
+    Ok(sysfs_codec::decode(
+        name,
+        &fs::read_to_string(path(name)?)?,
+    )?)
 }
 pub(super) fn write(name: &str, text: &str) -> Result<()> {
-    if text.len() > 128 {
+    let text = sysfs_codec::encode(name, text)?;
+    if text.len() > interface::MAX_TEXT {
         return Err("Control request too long".into());
     }
     fs::write(path(name)?, text).map_err(|error| write_error(name, &error))?;
@@ -64,7 +67,10 @@ fn write_error(name: &str, error: &std::io::Error) -> String {
     } else {
         ""
     };
-    format!("Cannot write {name}: {error}.{advice}")
+    format!(
+        "Cannot write {}: {error}.{advice}",
+        sysfs_codec::attribute(name)
+    )
 }
 
 pub(super) struct Controls;

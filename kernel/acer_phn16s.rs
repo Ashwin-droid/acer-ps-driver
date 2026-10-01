@@ -15,6 +15,8 @@ use kernel::{
 mod acpi_controls;
 #[path = "../src/control.rs"]
 mod control;
+#[path = "../src/interface.rs"]
+mod interface;
 mod hardware_hid;
 #[path = "../src/protocol.rs"]
 mod protocol;
@@ -51,8 +53,6 @@ fn matches_dmi(field: i32, expected: &CStr) -> bool {
 struct State {
     #[cfg(aps_dev)]
     developer: dev_probe::Developer,
-    fan_deadline: u64,
-    last_light: Option<control::Light>,
     last_light_ns: u64,
     button_mode: control::ButtonMode,
     button_error: i32,
@@ -70,7 +70,6 @@ struct State {
     boot_last_ns: Option<u64>,
 }
 static STATE: AtomicPtr<Mutex<State>> = AtomicPtr::new(core::ptr::null_mut());
-const LEASE_NS: u64 = 5_000_000_000;
 fn now() -> u64 {
     unsafe { bindings::ktime_get_boot_fast_ns() }
 }
@@ -106,31 +105,27 @@ const fn root_control(name: &'static CStr) -> Attribute {
 static ATTRS: &[Attribute] = &[
     attr(c"cpu_fan_rpm", false),
     attr(c"gpu_fan_rpm", false),
-    attr(c"profile", true),
+    attr(c"performance_mode", true),
     attr(c"fan_control", true),
-    attr(c"keyboard_capabilities", false),
-    attr(c"keyboard_effect", true),
-    attr(c"keyboard_timeout", true),
-    attr(c"fan_lease_ms", false),
-    attr(c"button_mode", true),
-    attr(c"button_presses", false),
-    attr(c"button_error", false),
-    attr(c"turbo_led", true),
-    attr(c"turbo_led_mode", true),
-    attr(c"turbo_led_capabilities", false),
-    attr(c"keyboard_state", false),
-    attr(c"turbo_led_manual", false),
-    attr(c"sense_presses", false),
-    attr(c"logo", true),
-    attr(c"logo_capabilities", false),
+    attr(c"keyboard_lighting_capabilities", false),
+    attr(c"keyboard_lighting", true),
+    attr(c"keyboard_backlight_timeout_seconds", true),
+    attr(c"turbo_button_mode", true),
+    attr(c"turbo_button_presses", false),
+    attr(c"turbo_button_error", false),
+    attr(c"turbo_lighting", true),
+    attr(c"turbo_lighting_capabilities", false),
+    attr(c"predatorsense_button_presses", false),
+    attr(c"cover_lighting", true),
+    attr(c"cover_lighting_capabilities", false),
     attr(c"dev_mode", false),
     attr(c"sleep_status", false),
-    attr(c"sleep_logo", true),
+    attr(c"sleep_cover_lighting", true),
     attr(c"lid_state", false),
     attr(c"lid_status", false),
-    root_control(c"mux_mode"),
+    root_control(c"gpu_mux_mode"),
     root_control(c"boot_effects"),
-    attr(c"mux_request", false),
+    attr(c"gpu_mux_request", false),
     #[cfg(aps_dev)]
     attr(c"dev_challenge", false),
     #[cfg(aps_dev)]
@@ -139,13 +134,13 @@ static ATTRS: &[Attribute] = &[
 ];
 
 struct Output {
-    bytes: [u8; 256],
+    bytes: [u8; interface::MAX_TEXT],
     len: usize,
 }
 impl Output {
     fn new() -> Self {
         Self {
-            bytes: [0; 256],
+            bytes: [0; interface::MAX_TEXT],
             len: 0,
         }
     }
@@ -175,14 +170,14 @@ fn read_control(name: &[u8], state: &State, out: &mut Output) -> Result<()> {
         if state.sleep.sleeping { return Err(EBUSY); }
         return writeln!(out, "{}", acpi_controls::boot_effects()?.name()).map_err(|_| EOVERFLOW);
     }
-    if name == b"mux_request" {
+    if name == b"gpu_mux_request" {
         return match state.mux_request {
             None => writeln!(out, "none"),
             Some((mode, 0)) => writeln!(out, "{} accepted; restart required", mode.name()),
             Some((mode, error)) => writeln!(out, "{} uncertain; error={}; check firmware selection", mode.name(), error),
         }.map_err(|_| EOVERFLOW);
     }
-    if name == b"mux_mode" {
+    if name == b"gpu_mux_mode" {
         if state.sleep.sleeping { return Err(EBUSY); }
         return writeln!(out, "{}", acpi_controls::mux_mode()?.name()).map_err(|_| EOVERFLOW);
     }
@@ -198,9 +193,9 @@ fn read_control(name: &[u8], state: &State, out: &mut Output) -> Result<()> {
             state.sleep.cycles, state.sleep.attempts, state.sleep.error).map_err(|_| EOVERFLOW);
     }
     // Cached intent remains readable, but never query suspended HID/ACPI devices.
-    if state.sleep.sleeping && matches!(name, b"profile" | b"fan_control" |
-        b"cpu_fan_rpm" | b"gpu_fan_rpm" | b"keyboard_capabilities" |
-        b"keyboard_timeout" | b"turbo_led_capabilities" | b"logo_capabilities") {
+    if state.sleep.sleeping && matches!(name, b"performance_mode" | b"fan_control" |
+        b"cpu_fan_rpm" | b"gpu_fan_rpm" | b"keyboard_lighting_capabilities" |
+        b"keyboard_backlight_timeout_seconds" | b"turbo_lighting_capabilities" | b"cover_lighting_capabilities") {
         return Err(EBUSY);
     }
     if name==b"dev_mode" { return writeln!(out,"{}",u8::from(cfg!(aps_dev))).map_err(|_|EOVERFLOW); }
@@ -218,81 +213,39 @@ fn read_control(name: &[u8], state: &State, out: &mut Output) -> Result<()> {
         }
         return writeln!(out).map_err(|_|EOVERFLOW);
     }
-    if name == b"keyboard_state" {
-        for setting in state.keyboard_zones.iter().flatten() {
-            writeln!(
-                out,
-                "{} {} {} {} {} {:02X}{:02X}{:02X}",
-                control::effect(setting.mode).ok_or(EIO)?,
-                setting.brightness,
-                setting.speed,
-                control::light_parameter(setting.mode, setting.direction).ok_or(EIO)?,
-                setting.zones,
-                setting.rgb[0],
-                setting.rgb[1],
-                setting.rgb[2]
-            )
-            .map_err(|_| EOVERFLOW)?;
-        }
-        if state.keyboard_zones.iter().all(Option::is_none) {
-            writeln!(out, "unknown").map_err(|_| EOVERFLOW)?;
-        }
-        return Ok(());
-    }
     let format_result = match name {
-        b"sleep_logo" => writeln!(out, "{}", state.sleep_logo),
-        b"logo_capabilities" => writeln!(out, "83 1 {:08x}", hardware_hid::logo_info()?),
-        b"logo" => match state.logo {
-            Some(setting) => writeln!(out, "{}", setting),
-            None => writeln!(out, "unknown"),
+        b"sleep_cover_lighting" => writeln!(out, "{}", interface::Cover(state.sleep_logo)),
+        b"cover_lighting_capabilities" => writeln!(out, "83 1 {:08x}", hardware_hid::logo_info()?),
+        b"cover_lighting" => match state.logo {
+            Some(setting) => writeln!(out, "{}", interface::Cover(setting)),
+            None => writeln!(out, "undefined"),
         },
         b"preferences_generation" => writeln!(out, "{}", state.generation),
-        b"sense_presses" => writeln!(out, "{}", turbo_button::sense_presses()),
-        b"turbo_led_manual" => match state.turbo_led_manual {
-            control::TurboLed::Rgb(rgb) => {
-                writeln!(out, "{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
-            }
-            _ => writeln!(out, "off"),
-        },
+        b"predatorsense_button_presses" => writeln!(out, "{}", turbo_button::sense_presses()),
         b"cpu_fan_rpm" => writeln!(out, "{}", acpi_controls::rpm(false)?),
         b"gpu_fan_rpm" => writeln!(out, "{}", acpi_controls::rpm(true)?),
-        b"profile" => writeln!(out, "{}", profile_name(acpi_controls::profile()?)?),
+        b"performance_mode" => writeln!(out, "{}", profile_name(acpi_controls::profile()?)?),
         b"fan_control" => {
-            let v = acpi_controls::fan_state()?;
-            writeln!(out, "{} {}", v & 3, (v >> 6) & 3)
+            match acpi_controls::fan_setting()? {
+                control::Fans::Auto => writeln!(out, "auto"),
+                control::Fans::Maximum => writeln!(out, "maximum"),
+                control::Fans::Manual(cpu, gpu) => writeln!(out, "manual {} {}", cpu, gpu),
+            }
         }
-        b"fan_lease_ms" => writeln!(
-            out,
-            "{}",
-            state.fan_deadline.saturating_sub(now()) / 1_000_000
-        ),
-        b"keyboard_capabilities" => {
+        b"keyboard_lighting_capabilities" => {
             let (zones, effects) = hardware_hid::lighting_info()?;
             writeln!(out, "{} {:08x}", zones, effects)
         }
-        b"keyboard_timeout" => writeln!(out, "{}", hardware_hid::timeout()?),
-        b"turbo_led_capabilities" => {
+        b"keyboard_backlight_timeout_seconds" => writeln!(out, "{}", hardware_hid::timeout()?),
+        b"turbo_lighting_capabilities" => {
             let (t, z, e) = hardware_hid::turbo_info()?;
             writeln!(out, "{:02x} {} {:08x}", t, z, e)
         }
-        b"turbo_led" => match state.turbo_led {
-            Some(control::TurboLed::Auto) => writeln!(out, "auto"),
-            None => writeln!(out, "unknown"),
-            Some(control::TurboLed::Off) => writeln!(out, "off"),
-            Some(control::TurboLed::Rgb(rgb)) => {
-                writeln!(out, "{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
-            }
+        b"turbo_lighting" => match state.turbo_led {
+            Some(setting) => writeln!(out, "{}", interface::Turbo { setting, manual: state.turbo_led_manual }),
+            None => writeln!(out, "undefined"),
         },
-        b"turbo_led_mode" => writeln!(
-            out,
-            "{}",
-            match state.turbo_led {
-                None => "unknown",
-                Some(control::TurboLed::Auto) => "auto",
-                _ => "manual",
-            }
-        ),
-        b"button_mode" => writeln!(
+        b"turbo_button_mode" => writeln!(
             out,
             "{}",
             match state.button_mode {
@@ -300,23 +253,9 @@ fn read_control(name: &[u8], state: &State, out: &mut Output) -> Result<()> {
                 control::ButtonMode::Hotkey => "hotkey",
             }
         ),
-        b"button_presses" => writeln!(out, "{}", turbo_button::presses()),
-        b"button_error" => writeln!(out, "{}", state.button_error),
-        b"keyboard_effect" => match state.last_light {
-            Some(s) => writeln!(
-                out,
-                "{} {} {} {} {} {:02X}{:02X}{:02X}",
-                control::effect(s.mode).ok_or(EIO)?,
-                s.brightness,
-                s.speed,
-                control::light_parameter(s.mode, s.direction).ok_or(EIO)?,
-                s.zones,
-                s.rgb[0],
-                s.rgb[1],
-                s.rgb[2]
-            ),
-            None => writeln!(out, "unknown"),
-        },
+        b"turbo_button_presses" => writeln!(out, "{}", turbo_button::presses()),
+        b"turbo_button_error" => writeln!(out, "{}", state.button_error),
+        b"keyboard_lighting" => writeln!(out, "{}", interface::Keyboard(state.keyboard_zones)),
         _ => return Err(EINVAL),
     };
     format_result.map_err(|_| EOVERFLOW)
@@ -325,9 +264,9 @@ fn read_control(name: &[u8], state: &State, out: &mut Output) -> Result<()> {
 fn write_control(name: &[u8], input: &[u8], state: &mut State) -> Result<()> {
     // Parsers reject unsupported, malformed and out-of-range requests before any hardware I/O.
     match name {
-        b"sleep_logo" => {
+        b"sleep_cover_lighting" => {
             // Configuration only: never touch the awake logo or its cache.
-            state.sleep_logo = control::sleep_logo(input).ok_or(EINVAL)?;
+            state.sleep_logo = interface::Cover::parse(input).ok_or(EINVAL)?;
             Ok(())
         }
         b"boot_effects" => {
@@ -339,7 +278,7 @@ fn write_control(name: &[u8], input: &[u8], state: &mut State) -> Result<()> {
             pr_info!("acer_phn16s: boot animation/sound {} result={}\n", value.name(), result.as_ref().err().map_or(0, |e| e.to_errno()));
             result
         }
-        b"mux_mode" => {
+        b"gpu_mux_mode" => {
             let setting = mux::Mode::parse(input).ok_or(EINVAL)?;
             let stamp = now();
             if state.mux_last_ns.is_some_and(|last| stamp.saturating_sub(last) < 2_000_000_000) {
@@ -355,7 +294,7 @@ fn write_control(name: &[u8], input: &[u8], state: &mut State) -> Result<()> {
             pr_info!("acer_phn16s: MUX request {} result={}; restart required on success; no automatic rollback\n", setting.name(), error);
             result
         }
-        b"logo" => {
+        b"cover_lighting" => {
             let setting = if control::logo_reapply(input) {
                 #[cfg(aps_dev)]
                 if state.developer.active { return Err(EBUSY); }
@@ -363,69 +302,56 @@ fn write_control(name: &[u8], input: &[u8], state: &mut State) -> Result<()> {
                 // latest user choice, never a stale userspace snapshot.
                 state.logo.ok_or(EAGAIN)?
             } else {
-                control::logo(input).ok_or(EINVAL)?
+                interface::Cover::parse(input).ok_or(EINVAL)?
             };
             hardware_hid::set_logo(setting)?;
             state.logo = Some(setting);
             Ok(())
         }
-        b"profile" => set_profile_with_lid(control::profile(input).ok_or(EINVAL)?, state),
+        b"performance_mode" => set_profile_with_lid(control::profile(input).ok_or(EINVAL)?, state),
         b"fan_control" => {
             let setting = control::fans(input).ok_or(EINVAL)?;
-            // An ambiguous failure also leaves a watchdog active for another Auto attempt.
-            state.fan_deadline = now().saturating_add(LEASE_NS);
-            acpi_controls::set_fans(setting)?;
-            if setting == control::Fans::Auto {
-                state.fan_deadline = 0;
-            }
-            Ok(())
+            acpi_controls::set_fans(setting)
         }
-        b"keyboard_effect" => {
-            let setting = control::light(input).ok_or(EINVAL)?;
+        b"keyboard_lighting" => {
+            let setting = interface::Keyboard::parse(input).filter(|s| s.writable()).ok_or(EINVAL)?;
             require_open_lid(state)?;
             let stamp = now();
             if stamp.saturating_sub(state.last_light_ns) < 10_000_000 {
                 return Err(EBUSY);
             }
-            hardware_hid::set_light(setting)?;
-            state.last_light = Some(setting);
-            for (zone, stored) in state.keyboard_zones.iter_mut().enumerate() {
-                if setting.zones & (1 << zone) != 0 {
-                    *stored = Some(control::Light {
-                        zones: 1 << zone,
-                        ..setting
-                    });
+            for report in sleep_state::keyboard_reports(setting.0).into_iter().flatten() {
+                let result = hardware_hid::set_light(report);
+                for (zone, stored) in state.keyboard_zones.iter_mut().enumerate() {
+                    if report.zones & (1 << zone) != 0 {
+                        // A failed transport may have partly applied. Do not
+                        // claim the old intent is known for these zones.
+                        *stored = if result.is_ok() { Some(control::Light { zones: 1 << zone, ..report }) } else { None };
+                    }
+                }
+                if let Err(error) = result {
+                    state.last_light_ns = stamp;
+                    state.generation = state.generation.wrapping_add(1);
+                    return Err(error);
                 }
             }
             state.last_light_ns = stamp;
             Ok(())
         }
-        b"keyboard_timeout" => {
-            let setting = control::timeout(input).ok_or(EINVAL)?;
+        b"keyboard_backlight_timeout_seconds" => {
+            let setting = match core::str::from_utf8(input).map_err(|_| EINVAL)?.trim() { "0" => false, "30" => true, _ => return Err(EINVAL) };
             require_open_lid(state)?;
             hardware_hid::set_timeout(setting)
         }
-        b"turbo_led" => {
-            let setting = control::turbo_led(input).ok_or(EINVAL)?;
+        b"turbo_lighting" => {
+            let setting = interface::Turbo::parse(input, state.turbo_led_manual).ok_or(EINVAL)?;
             require_open_lid(state)?;
-            hardware_hid::set_turbo_led(setting)?;
-            state.turbo_led = Some(setting);
-            state.turbo_led_manual = setting;
+            hardware_hid::set_turbo_led(setting.setting)?;
+            state.turbo_led = Some(setting.setting);
+            state.turbo_led_manual = setting.manual;
             Ok(())
         }
-        b"turbo_led_mode" => {
-            let auto = control::turbo_led_mode(input).ok_or(EINVAL)?;
-            require_open_lid(state)?;
-            let setting = if auto {
-                control::TurboLed::Auto
-            } else {
-                state.turbo_led_manual
-            };
-            hardware_hid::set_turbo_led(setting)?;
-            state.turbo_led = Some(setting);
-            Ok(())
-        }
-        b"button_mode" => {
+        b"turbo_button_mode" => {
             state.button_mode = control::button_mode(input).ok_or(EINVAL)?;
             state.button_error = 0;
             Ok(())
@@ -450,7 +376,7 @@ unsafe extern "C" fn show(
         let name = unsafe { CStr::from_char_ptr((*attribute).attr.name) };
         let mut output = Output::new();
         read_control(name.to_bytes(), &state, &mut output)?;
-        // SAFETY: sysfs supplies PAGE_SIZE bytes; bounded formatter produces at most 256.
+        // SAFETY: sysfs supplies PAGE_SIZE bytes; formatter produces at most 512.
         unsafe { core::ptr::copy_nonoverlapping(output.bytes.as_ptr(), buffer.cast(), output.len) };
         Ok(output.len as isize)
     })();
@@ -465,9 +391,9 @@ unsafe extern "C" fn store(
 ) -> isize {
     let result = (|| {
         #[cfg(aps_dev)]
-        let maximum=dev_probe::wire::TEXT_LEN+1;
+        let maximum=(dev_probe::wire::TEXT_LEN+1).max(interface::MAX_TEXT);
         #[cfg(not(aps_dev))]
-        let maximum=128;
+        let maximum=interface::MAX_TEXT;
         if count == 0 || count > maximum {
             return Err(EINVAL);
         }
@@ -482,7 +408,7 @@ unsafe extern "C" fn store(
         // Enforce administrative privilege independently of sysfs modes, ACLs,
         // or a writable fd passed from root. capable() checks the initial user
         // namespace, so container/user-namespace root is not sufficient.
-        if matches!(name.to_bytes(), b"mux_mode" | b"boot_effects")
+        if matches!(name.to_bytes(), b"gpu_mux_mode" | b"boot_effects")
             && !unsafe { bindings::capable(bindings::CAP_SYS_ADMIN as i32) } {
             return Err(EPERM);
         }
@@ -497,11 +423,11 @@ unsafe extern "C" fn store(
             result?;
             return Ok(count as isize);
         }
-        if count>128 { return Err(EINVAL); }
+        if count>128 && name.to_bytes()!=b"keyboard_lighting" { return Err(EINVAL); }
         write_control(name.to_bytes(), input, &mut state)?;
         // Boot GPU selection belongs to firmware, never the lighting/profile
         // preference file. Do not cause aps-state to capture/replay it.
-        if !matches!(name.to_bytes(), b"mux_mode" | b"boot_effects") {
+        if !matches!(name.to_bytes(), b"gpu_mux_mode" | b"boot_effects") {
             state.generation = state.generation.wrapping_add(1);
         }
         Ok(count as isize)
@@ -547,22 +473,15 @@ fn sleep_event(prepare: bool, suspend: bool) {
         // updates. Userspace persistence continues to see the intended colors.
         let lighting = sleep_state::SleepLighting::new(state.sleep_logo, suspend);
         let mut error = 0;
-        // Release an outstanding manual fan lease before freezing its owner.
-        if state.fan_deadline != 0 {
-            match acpi_controls::auto() {
-                Ok(()) => state.fan_deadline = 0,
-                Err(e) => pr_err!("acer_phn16s: sleep fan Auto failed: {}\n", e.to_errno()),
-            }
-        }
         for (component, result) in [
             ("keyboard", hardware_hid::set_light(lighting.keyboard)),
-            ("logo", hardware_hid::set_logo(lighting.logo)),
+            ("cover_lighting", hardware_hid::set_logo(lighting.logo)),
             ("turbo", hardware_hid::set_turbo_led(lighting.turbo)),
         ] {
             if let Err(e) = result {
                 error = e.to_errno();
                 pr_err!("acer_phn16s: sleep {} setting failed: {}\n", component, error);
-                if component == "logo" && lighting.logo != control::Logo::Off {
+                if component == "cover_lighting" && lighting.logo != control::Logo::Off {
                     if let Err(fallback) = hardware_hid::set_logo(control::Logo::Off) {
                         pr_err!("acer_phn16s: sleep logo off fallback failed: {}\n", fallback.to_errno());
                     }
@@ -729,18 +648,6 @@ unsafe extern "C" fn watchdog(data: *mut kernel::ffi::c_void) -> i32 {
                     );
                 }
             }
-            if guard.fan_deadline != 0 && now() >= guard.fan_deadline {
-                match acpi_controls::auto() {
-                    Ok(()) => {
-                        guard.fan_deadline = 0;
-                        pr_info!("acer_phn16s: fan lease expired; Auto restored\n");
-                    }
-                    Err(_) => {
-                        guard.fan_deadline = now().saturating_add(LEASE_NS);
-                        pr_err!("acer_phn16s: fan lease restore failed; will retry\n");
-                    }
-                }
-            }
             if guard.sleep.ready(now()) {
                 restore_rgb(&mut guard);
             } else if guard.lid.ready(now())
@@ -782,8 +689,6 @@ impl kernel::Module for AcerModule {
             new_mutex!(State {
                 #[cfg(aps_dev)]
                 developer: dev_probe::Developer::new(),
-                fan_deadline: 0,
-                last_light: None,
                 last_light_ns: 0,
                 button_mode: control::ButtonMode::PowerModes,
                 button_error: 0,
@@ -865,12 +770,6 @@ impl Drop for AcerModule {
         }
         if let Some(thread) = self.thread.take() {
             unsafe { bindings::kthread_stop(thread.0) };
-        }
-        {
-            let state = self.state.lock();
-            if state.fan_deadline != 0 && acpi_controls::auto().is_err() {
-                pr_err!("acer_phn16s: unload Auto restore failed\n");
-            }
         }
         drop(self.sense.take());
         if let Some(mut button) = self.button.take() {

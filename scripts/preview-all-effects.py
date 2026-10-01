@@ -29,12 +29,12 @@ print(f'Preview PID: {os.getpid()}', flush=True)
 if 'active=0' not in command(PROBE, 'status'):
     raise SystemExit('Another developer session is active; refusing to interfere')
 command('/usr/local/libexec/aps-state', 'save')
-keyboard = (BASE / 'keyboard_state').read_text().strip().splitlines()
-logo = (BASE / 'logo').read_text().strip()
-if len(keyboard) != 4 or logo == 'unknown':
+keyboard = (BASE / 'keyboard_lighting').read_text().strip()
+logo = (BASE / 'cover_lighting').read_text().strip()
+if 'undefined' in keyboard or logo == 'undefined':
     raise SystemExit('Need known keyboard and logo settings before previewing')
 before = {name: (BASE / name).read_text() for name in
-          ('profile', 'fan_control', 'button_mode', 'keyboard_timeout', 'turbo_led')}
+          ('performance_mode', 'fan_control', 'turbo_button_mode', 'keyboard_backlight_timeout_seconds', 'turbo_lighting')}
 tests = [
     ('Keyboard OFF', ['keyboard', 'off'], 3, 'Keyboard should be dark.'),
     ('Keyboard STATIC red', ['keyboard', 'static', 'FF0000', '50'], 7, 'Steady red, 50%.'),
@@ -53,7 +53,6 @@ tests = [
     ('Back logo STATIC magenta', ['logo', 'FF00FF', '60'], 7, 'Back logo steady magenta.'),
     ('Back logo BREATHING', ['logo', 'breathing', '60', '3'], 10, 'Back logo fades through RGB.'),
     ('Back logo NEON', ['logo', 'neon', '60', '3'], 8, 'Back logo smoothly cycles RGB.'),
-    ('Back logo OPMODE', ['logo', 'opmode', '60'], 5, 'Normally off. Turbo flash was verified earlier; no button press needed now.'),
 ]
 results = []
 active = False
@@ -63,8 +62,7 @@ try:
     active = True
     for index, (label, args, delay, description) in enumerate(tests, 1):
         if label == 'Back logo OFF':
-            for row in keyboard:
-                (BASE / 'keyboard_effect').write_text(row)
+            (BASE / 'keyboard_lighting').write_text(keyboard)
         notify(f'APS {index}/{len(tests)}: {label}', description)
         output = command(APS, *args)
         results.append({'effect': label, 'command': [APS, *args], 'accepted': True, 'output': output})
@@ -73,9 +71,8 @@ try:
     assert {name: (BASE / name).read_text() for name in before} == before, 'Unrelated control changed'
 finally:
     try:
-        for row in keyboard:
-            (BASE / 'keyboard_effect').write_text(row)
-        (BASE / 'logo').write_text(logo)
+        (BASE / 'keyboard_lighting').write_text(keyboard)
+        (BASE / 'cover_lighting').write_text(logo)
     finally:
         if active:
             command(PROBE, 'finish')

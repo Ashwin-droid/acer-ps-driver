@@ -1,6 +1,10 @@
 //! Restricted userspace persistence worker. Hardware access is only through typed sysfs.
 #[path = "../control.rs"]
 mod control;
+#[path = "../interface.rs"]
+mod interface;
+#[path = "../sysfs_codec.rs"]
+mod sysfs_codec;
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
@@ -189,7 +193,19 @@ fn save(state: &Snapshot) -> Result<()> {
     result
 }
 fn read(name: &str) -> Result<String> {
-    Ok(fs::read_to_string(Path::new(SYSFS).join(name))?)
+    Ok(read_io(name)?)
+}
+fn read_io(name: &str) -> std::io::Result<String> {
+    sysfs_codec::decode(
+        name,
+        &fs::read_to_string(Path::new(SYSFS).join(sysfs_codec::attribute(name)))?,
+    )
+}
+fn write_control(name: &str, value: &str) -> std::io::Result<()> {
+    fs::write(
+        Path::new(SYSFS).join(sysfs_codec::attribute(name)),
+        sysfs_codec::encode(name, value)?,
+    )
 }
 fn generation() -> Result<u64> {
     Ok(read("preferences_generation")?.trim().parse()?)
@@ -218,10 +234,7 @@ fn capture(previous: &Snapshot) -> Result<Option<Snapshot>> {
     let mut state = previous.clone();
     // Configuration-only, available with the lid closed. Missing on an older
     // module during upgrade: retain any previously saved sleep preference.
-    merge_sleep_logo_capture(
-        &mut state,
-        fs::read_to_string(Path::new(SYSFS).join("sleep_logo")),
-    )?;
+    merge_sleep_logo_capture(&mut state, read_io("sleep_logo"))?;
     for name in ["profile", "button_mode"] {
         let value = read(name)?;
         if !valid(name, value.trim()) {
@@ -253,7 +266,7 @@ fn capture(previous: &Snapshot) -> Result<Option<Snapshot>> {
     }
     // Optional during upgrade from a module that predates logo controls. An
     // unknown cache is not a claim that the physical logo is off.
-    match fs::read_to_string(Path::new(SYSFS).join("logo")) {
+    match read_io("logo") {
         Ok(value) if value.trim() == "unknown" => (),
         Ok(value) => {
             if !valid("logo", value.trim()) {
@@ -345,7 +358,7 @@ fn restore(state: &Snapshot) -> Result<()> {
 }
 fn restore_pending(pending: &mut Snapshot) -> Result<Vec<String>> {
     restore_pending_with(pending, |attribute, value| {
-        fs::write(Path::new(SYSFS).join(attribute), value)?;
+        write_control(attribute, value)?;
         thread::sleep(Duration::from_millis(25));
         Ok(())
     })
@@ -550,7 +563,7 @@ impl LogoSettling {
     }
 }
 fn reapply_current_logo() -> Result<bool> {
-    match fs::read_to_string(Path::new(SYSFS).join("logo")) {
+    match read_io("logo") {
         Ok(value) if value.trim() == "unknown" => return Ok(false),
         Ok(value) if !valid("logo", value.trim()) => return Err("invalid cached logo state".into()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -560,7 +573,7 @@ fn reapply_current_logo() -> Result<bool> {
     developer_stamp()?;
     // Kernel-side state lookup is atomic with a newer CLI write. No copied
     // logo value crosses the check/write race. This command is never persisted.
-    fs::write(Path::new(SYSFS).join("logo"), b"reapply")?;
+    write_control("logo", "reapply")?;
     Ok(true)
 }
 fn watch() -> Result<()> {

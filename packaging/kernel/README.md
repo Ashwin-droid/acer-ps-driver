@@ -18,13 +18,14 @@ sudo ./install.sh ashwinmhaskar
 The account's primary group receives access to these attributes under
 `/sys/class/misc/acer-phn16s/`:
 
-- Read: cpu_fan_rpm, gpu_fan_rpm, keyboard_capabilities, fan_lease_ms,
-  button_presses, sense_presses, button_error, turbo_led_capabilities,
-  keyboard_state, turbo_led_manual, preferences_generation, logo_capabilities,
-  sleep_status, lid_state, lid_status, mux_request.
-- Read/write: profile, fan_control, keyboard_effect, keyboard_timeout,
-  button_mode, turbo_led, turbo_led_mode, logo, sleep_logo.
-- User read / root write: mux_mode, mode 0640 with an additional kernel CAP_SYS_ADMIN check.
+- Read: cpu_fan_rpm, gpu_fan_rpm, keyboard_lighting_capabilities,
+  turbo_button_presses, predatorsense_button_presses, turbo_button_error,
+  turbo_lighting_capabilities, preferences_generation, cover_lighting_capabilities,
+  sleep_status, lid_state, lid_status, gpu_mux_request.
+- Read/write: performance_mode, fan_control, keyboard_lighting,
+  keyboard_backlight_timeout_seconds, turbo_button_mode, turbo_lighting,
+  cover_lighting, sleep_cover_lighting.
+- User read / root write: gpu_mux_mode, mode 0640 with an additional kernel CAP_SYS_ADMIN check.
 - User read / root write: boot_effects, the startup effects master switch, not the separate BIOS sound mute setting.
 
 Attributes are root-owned, mode 0440 for reads and 0660 for ordinary controls.
@@ -44,21 +45,21 @@ no configurable-key or fake-press interface. The separate ModeKeyLED supports
 native Auto following performance mode, or bounded manual RGB. HID/input handlers
 and the virtual input device are removed during module teardown.
 
-Fan overrides expire after five seconds without renewal; a kernel worker restores
-Auto. Unload also requests Auto for an outstanding lease. Firmware failures are
-logged/retried. A separate userspace service can restore preferences via these controls.
+Fan settings have no lease or expiry, and suspend/unload do not request Auto.
+`fan_control` reads firmware as auto, maximum, or manual CPU GPU, accepting the
+same syntax on writes. Failed/mixed unsupported firmware readback returns EIO,
+not undefined. The CLI applies once and exits without resetting the setting.
 
 A kernel blocking PM notifier turns off keyboard and Turbo RGB before sleep.
-The cover logo uses the memory-only `sleep_logo` preference during suspend:
-off by default, static BRIGHTNESS RGB, or breathing/neon BRIGHTNESS SPEED.
+The cover logo uses the memory-only `sleep_cover_lighting` preference during suspend:
+off by default, static COLOR brightness=N, or breathing/neon brightness=N speed=N.
 Hibernation and image restore always turn all RGB off. Keyboard and Turbo remain
 off during suspend regardless of the last lid reading. A failed sleep-logo write
 triggers one off attempt and is logged, but does not veto sleep. Firmware can
 override the requested effect during sleep; no physical readback is available.
 Temporary lighting writes never change cached awake settings or preference
 generation. Hardware reads and all writes return EBUSY while sleeping; cached
-settings remain readable. The worker stops hardware/button actions during sleep,
-and an active manual fan lease is returned to Auto before sleep.
+settings remain readable. The worker stops hardware/button actions during sleep.
 
 After resume or an aborted suspend, the worker waits two seconds for the controller,
 then restores the latest cached keyboard zones/effect, logo and finally Turbo LED.
@@ -85,7 +86,7 @@ Cover-logo writes use only target 0x83 and the verified zero zone mask. Accepted
 settings are off, static brightness/RGB, and native RGB-cycling breathing/neon.
 Brightness is 0..100, animation speed 1..5. Opmode, Shifting and user-supplied
 targets, directions and report fields are rejected by the normal logo parser.
-The `logo` attribute also accepts `reapply`: under the state mutex it resubmits
+The `cover_lighting` attribute also accepts `reapply`: under the state mutex it resubmits
 the latest cached setting. It rejects requests without a cached setting and
 refuses to interfere with an active developer session. It is not a preference
 value and cannot restore a stale userspace-supplied color.
@@ -103,7 +104,7 @@ account, using private user-owned files under ~/.local/state/aps/. The kernel
 validates every sysfs write independently of that service. No root-only preference
 store, file I/O helpers, or shutdown persistence notifier remain in the module.
 
-The `mux_mode` control accepts exactly optimus/nvidia/auto. It uses fixed WMBH
+The `gpu_mux_mode` control accepts exactly optimus/nvidia/auto. It uses fixed WMBH
 method 0x17 selector 2 for reads and 0x16 selector 2 for writes, with enum values
 1/2/3. No arbitrary selector, LCD overdrive, reboot or PRIME operation is exposed.
 The setter first requires a recognized getter, then rate-limits firmware attempts

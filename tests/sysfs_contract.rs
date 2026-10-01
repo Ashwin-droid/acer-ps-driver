@@ -8,16 +8,16 @@ fn closed_lid_rejects_rgb_without_changing_cached_intent() {
     assert_eq!(read("lid_state").trim(), "closed");
     let generation = read("preferences_generation");
     let before = [
-        read("keyboard_state"),
-        read("turbo_led"),
-        read("turbo_led_mode"),
-        read("logo"),
+        read("keyboard_lighting"),
+        read("turbo_lighting"),
+        read("turbo_lighting"),
+        read("cover_lighting"),
     ];
     for (name, value) in [
-        ("keyboard_effect", "static 60 0 none 15 FF00FF"),
-        ("turbo_led", "FF00FF"),
-        ("turbo_led_mode", "auto"),
-        ("keyboard_timeout", "on"),
+        ("keyboard_lighting", "static FF00FF brightness=60"),
+        ("turbo_lighting", "static FF00FF"),
+        ("turbo_lighting", "auto"),
+        ("keyboard_backlight_timeout_seconds", "30"),
     ] {
         let error = write(name, value.as_bytes()).expect_err("lid gate accepted lighting write");
         assert_eq!(error.raw_os_error(), Some(112), "{name}: {error}");
@@ -25,10 +25,10 @@ fn closed_lid_rejects_rgb_without_changing_cached_intent() {
     assert_eq!(read("preferences_generation"), generation);
     assert_eq!(
         [
-            read("keyboard_state"),
-            read("turbo_led"),
-            read("turbo_led_mode"),
-            read("logo")
+            read("keyboard_lighting"),
+            read("turbo_lighting"),
+            read("turbo_lighting"),
+            read("cover_lighting")
         ],
         before
     );
@@ -47,11 +47,45 @@ fn write(name: &str, data: &[u8]) -> std::io::Result<()> {
 }
 
 #[test]
+#[ignore = "requires open lid and known lighting; reapplies only the current values"]
+fn lighting_reads_can_be_written_back_to_the_same_files() {
+    assert_eq!(read("lid_state").trim(), "open");
+    let before = [
+        read("keyboard_lighting"),
+        read("turbo_lighting"),
+        read("cover_lighting"),
+    ];
+    assert!(before.iter().all(|v| !v.contains("undefined")));
+    let sleep = read("sleep_cover_lighting");
+    let profile = read("performance_mode");
+    let fans = read("fan_control");
+    for (name, value) in ["keyboard_lighting", "turbo_lighting", "cover_lighting"]
+        .iter()
+        .zip(&before)
+    {
+        assert_eq!(read(name), *value, "setting changed while preparing test");
+        write(name, value.as_bytes()).unwrap();
+        assert_eq!(read(name), *value);
+    }
+    assert_eq!(
+        before,
+        [
+            read("keyboard_lighting"),
+            read("turbo_lighting"),
+            read("cover_lighting")
+        ]
+    );
+    assert_eq!(read("sleep_cover_lighting"), sleep);
+    assert_eq!(read("performance_mode"), profile);
+    assert_eq!(read("fan_control"), fans);
+}
+
+#[test]
 #[ignore = "requires installed APS sysfs driver and normal-user access"]
 fn kernel_rejects_invalid_requests_without_changing_control_state() {
     let cases: [(&str, &[&[u8]]); 8] = [
         (
-            "logo",
+            "cover_lighting",
             &[
                 b"raw a4 83",
                 b"shifting 60 3",
@@ -68,14 +102,16 @@ fn kernel_rejects_invalid_requests_without_changing_control_state() {
                 b"static 60 FF0000\0",
                 b"reapply extra",
                 b"reapply\0",
+                b"static FF0000 brightness=101",
+                b"breathing brightness=60 speed=0",
             ],
         ),
         (
-            "button_mode",
+            "turbo_button_mode",
             &[b"hotkey F15", b"F14", b"power modes extra", b"hotkey\0"],
         ),
         (
-            "turbo_led",
+            "turbo_lighting",
             &[
                 b"FFFFFF extra",
                 b"GGGGGG",
@@ -85,11 +121,11 @@ fn kernel_rejects_invalid_requests_without_changing_control_state() {
             ],
         ),
         (
-            "turbo_led_mode",
+            "turbo_lighting",
             &[b"auto extra", b"rainbow", b"manual FF00FF", b"auto\0"],
         ),
         (
-            "profile",
+            "performance_mode",
             &[
                 b"balanced extra",
                 b"turbo; reboot",
@@ -111,7 +147,7 @@ fn kernel_rejects_invalid_requests_without_changing_control_state() {
             ],
         ),
         (
-            "keyboard_effect",
+            "keyboard_lighting",
             &[
                 b"raw a4 21",
                 b"opmode 50 0 none 15 FFFFFF",
@@ -127,11 +163,17 @@ fn kernel_rejects_invalid_requests_without_changing_control_state() {
                 b"breathing 60 3 fixed 15 FFFFFF",
                 b"static 60 0 fixed 15 FFFFFF",
                 b"wave 60 3 cycle 15 FFFFFF",
+                b"undefined",
+                b"static FF0000 brightness=101",
+                b"static FF0000 00FF00",
+                b"static FF0000 brightness=30 brightness=40",
+                b"zones off ; off ; off ; raw a4 21",
+                b"zones off ; off ; off ; off ; off",
             ],
         ),
         (
-            "keyboard_timeout",
-            &[b"30", b"on extra", b"off\0", b"-1", b"\xff\xfe"],
+            "keyboard_backlight_timeout_seconds",
+            &[b"31", b"on", b"off\0", b"-1", b"\xff\xfe"],
         ),
     ];
     for (name, requests) in cases {
@@ -149,6 +191,23 @@ fn kernel_rejects_invalid_requests_without_changing_control_state() {
         assert_eq!(read(name), before, "malformed input changed {name}");
     }
     for name in [
+        "profile",
+        "keyboard_effect",
+        "keyboard_state",
+        "keyboard_timeout",
+        "keyboard_capabilities",
+        "turbo_led",
+        "turbo_led_mode",
+        "turbo_led_manual",
+        "logo",
+        "sleep_logo",
+        "fan_lease_ms",
+        "button_mode",
+        "button_presses",
+        "button_error",
+        "sense_presses",
+        "mux_mode",
+        "mux_request",
         "raw",
         "acpi",
         "ioctl",
@@ -170,13 +229,15 @@ fn kernel_rejects_invalid_requests_without_changing_control_state() {
         );
     }
     assert_eq!(
-        read("mux_request").trim(),
+        read("gpu_mux_request").trim(),
         "none",
         "this test must not request a GPU switch"
     );
-    assert!(write("mux_request", b"auto accepted").is_err());
+    assert!(write("gpu_mux_request", b"auto accepted").is_err());
     assert_eq!(
-        write("mux_mode", b"not-a-mode").unwrap_err().raw_os_error(),
+        write("gpu_mux_mode", b"not-a-mode")
+            .unwrap_err()
+            .raw_os_error(),
         Some(13)
     );
     let sleep = read("sleep_status");
@@ -194,25 +255,30 @@ fn sleep_preferences_are_bounded_and_do_not_change_awake_lighting() {
     struct Restore(String);
     impl Drop for Restore {
         fn drop(&mut self) {
-            write("sleep_logo", self.0.as_bytes()).unwrap();
+            write("sleep_cover_lighting", self.0.as_bytes()).unwrap();
         }
     }
-    let _restore = Restore(read("sleep_logo"));
-    let awake_logo = read("logo");
-    let keyboard = read("keyboard_state");
-    let turbo = read("turbo_led");
+    let _restore = Restore(read("sleep_cover_lighting"));
+    let awake_logo = read("cover_lighting");
+    let keyboard = read("keyboard_lighting");
+    let turbo = read("turbo_lighting");
     let pm = read("sleep_status");
     let lid = read("lid_state");
-    for value in ["off", "static 25 0000FF", "breathing 25 3", "neon 25 5"] {
-        write("sleep_logo", value.as_bytes()).unwrap();
-        assert_eq!(read("sleep_logo").trim(), value);
-        assert_eq!(read("logo"), awake_logo);
-        assert_eq!(read("keyboard_state"), keyboard);
-        assert_eq!(read("turbo_led"), turbo);
+    for value in [
+        "off",
+        "static 0000FF brightness=25",
+        "breathing brightness=25 speed=3",
+        "neon brightness=25 speed=5",
+    ] {
+        write("sleep_cover_lighting", value.as_bytes()).unwrap();
+        assert_eq!(read("sleep_cover_lighting").trim(), value);
+        assert_eq!(read("cover_lighting"), awake_logo);
+        assert_eq!(read("keyboard_lighting"), keyboard);
+        assert_eq!(read("turbo_lighting"), turbo);
         assert_eq!(read("sleep_status"), pm);
         assert_eq!(read("lid_state"), lid);
     }
-    let before = read("sleep_logo");
+    let before = read("sleep_cover_lighting");
     let generation = read("preferences_generation");
     for value in [
         "opmode 25",
@@ -225,37 +291,56 @@ fn sleep_preferences_are_bounded_and_do_not_change_awake_lighting() {
         "off extra",
     ] {
         assert_eq!(
-            write("sleep_logo", value.as_bytes())
+            write("sleep_cover_lighting", value.as_bytes())
                 .unwrap_err()
                 .raw_os_error(),
             Some(22)
         );
     }
     assert_eq!(
-        write("sleep_logo", &[b'x'; 129])
+        write("sleep_cover_lighting", &[b'x'; 129])
             .unwrap_err()
             .raw_os_error(),
         Some(22)
     );
-    assert_eq!(read("sleep_logo"), before);
+    assert_eq!(read("sleep_cover_lighting"), before);
     assert_eq!(read("preferences_generation"), generation);
 }
 
 #[test]
-#[ignore = "briefly enables Maximum, then tests kernel lease expiry without any CLI process"]
-fn kernel_restores_auto_when_userspace_stops_renewing() {
-    struct Restore;
+#[ignore = "tests Maximum and manual for six seconds each after CLI exit, then restores the original setting"]
+fn fans_persist_after_cli_exit_without_a_lease() {
+    struct Restore(String);
     impl Drop for Restore {
         fn drop(&mut self) {
-            let _ = write("fan_control", b"auto");
+            let _ = write("fan_control", self.0.as_bytes());
         }
     }
-    let _restore = Restore;
-    write("fan_control", b"maximum").unwrap();
-    assert_eq!(read("fan_control").trim(), "2 2");
-    let lease: u64 = read("fan_lease_ms").trim().parse().unwrap();
-    assert!(lease > 0 && lease <= 5000);
-    thread::sleep(Duration::from_secs(6));
-    assert_eq!(read("fan_control").trim(), "1 1");
-    assert_eq!(read("fan_lease_ms").trim(), "0");
+    let _restore = Restore(read("fan_control"));
+    for (args, expected) in [
+        (&["fans", "maximum"][..], "maximum"),
+        (&["fans", "manual", "55", "65"][..], "manual 55 65"),
+    ] {
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_aps"))
+            .args(args)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("fan CLI did not exit");
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(read("fan_control").trim(), expected);
+        assert!(!Path::new(ROOT).join("fan_lease_ms").exists());
+        thread::sleep(Duration::from_secs(6));
+        assert_eq!(read("fan_control").trim(), expected);
+    }
 }

@@ -1,6 +1,6 @@
 # APS DKMS source installation
 
-`acer-phn16s/0.3.1` is the production-only DKMS package. It still targets
+`acer-phn16s/0.4.0` is the production-only DKMS package. It still targets
 Predator PHN16S-71 / FTYPE_ARX / BIOS V1.28. It does not generalize firmware
 commands to other Acer models or enable raw developer probes.
 
@@ -11,7 +11,7 @@ python3 scripts/install-aps-dkms.py
 ```
 
 It copies a fixed manifest of driver sources, shared parsers, and the two HID
-descriptor fixtures to `/usr/src/acer-phn16s-0.3.1`. Files there are root-owned
+descriptor fixtures to `/usr/src/acer-phn16s-0.4.0`. Files there are root-owned
 and not group/other-writable. It does not symlink the source to this workspace,
 ship signing keys, or use compilers under a user's home directory.
 

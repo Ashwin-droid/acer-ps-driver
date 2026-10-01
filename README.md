@@ -35,8 +35,8 @@ pending for the successful retry; unrelated lighting can still restore.
     aps profile eco
 
     aps fans auto
-    aps fans maximum 60
-    aps fans manual 55 65 300
+    aps fans maximum
+    aps fans manual 55 65
 
     aps keyboard info
     aps keyboard static FF0000,00FF00,0000FF,BB00FF 80
@@ -131,7 +131,7 @@ The helper captures performance mode, button mode, all keyboard zones, timeout,
 Turbo LED auto/manual mode, and the last manual color. It debounces changes,
 writes atomically, fsyncs the new file and its directory, and saves on service
 stop/shutdown. It restores saved settings at startup and after a driver reload.
-Timed fan leases and running software animations are not restarted from disk.
+Fan overrides and running software animations are not restarted from disk.
 
 Only a fixed set of preference fields and bounded values is accepted. Files must
 be private and owned by the service user. Symlinks, devices, FIFOs, hard links,
@@ -148,12 +148,13 @@ Named lighting preset recipes under ~/.config/aps/profiles remain separate from
 the active-settings store.
 
 
-Manual fan values are CPU/GPU percentages in 40–100. The last argument is duration
-in seconds, default 60. Maximum/manual receive a five-second kernel lease, renewed
-by APS every two seconds. If APS crashes, is killed or stalls, a kernel worker
-requests Auto when the lease expires, normally within about 5.25 seconds after
-the last accepted renewal. Unloading also requests Auto for an outstanding lease.
-Hardware/firmware errors can prevent restoration; failures are logged and retried.
+Manual fan values are CPU/GPU percentages in 40–100. Fan commands apply once
+and exit. There is no duration argument, lease, renewal loop, or automatic reset
+on process exit, suspend, or module unload. Use `aps fans auto` to request Auto.
+Firmware can still change fan settings on power/performance transitions; APS
+does not fight those changes or restore fan overrides at boot. A failed fan
+configuration still attempts the existing immediate Auto rollback and reports
+the error; this is not an expiry timer.
 
 The native performance values are Quiet=0, Balanced=1, Performance=4, Turbo=5,
 Eco=6. The CLI requires AC power for Performance/Turbo. Firmware mode changes are
@@ -338,14 +339,14 @@ elevates a workspace binary, PATH-selected executable or arbitrary command.
 Running with sudo skips the dialog. Cancelling authorization does not fall back
 to an unprivileged write. Help, status and lighting never request elevation.
 The CLI checks its effective uid, and the kernel independently
-requires CAP_SYS_ADMIN in the initial user namespace. `mux_mode` is created 0640
+requires CAP_SYS_ADMIN in the initial user namespace. `gpu_mux_mode` is created 0640
 and the installed boot/udev rule preserves that root-write-only mode. Passing a
 writable fd from root or loosening file permissions does not bypass the kernel gate.
 Lighting permissions are unchanged. These use the model-locked sysfs interface.
 They do not run prime-select, rewrite driver configuration, update initramfs, or
 touch LCD overdrive. PRIME configuration is a separate task.
 
-`mux_mode` reads the firmware-reported mode and accepts only optimus/nvidia/auto.
+`gpu_mux_mode` reads the firmware-reported mode and accepts only optimus/nvidia/auto.
 `mux_request` is read-only and records the last APS request/result since module
 load. It is not durable and does not prove which GPU currently drives the panel.
 A failed request may have partially applied; APS reports uncertainty and never
@@ -422,7 +423,7 @@ up to three attempts in total.
 Temporary sleep lighting writes do not replace your awake preferences or cached
 choices. No userspace sleep script or kernel disk access is involved.
 During sleep, hardware queries and control writes return EBUSY; cached choices
-remain readable. Any active manual fan lease is released to Auto before sleep.
+remain readable. APS does not change fan control merely because sleep starts.
 Software effects still need their userspace process; the kernel can restore only
 their last accepted frame. Settings never configured through APS have no cached
 value to restore, so those components remain off until configured.
@@ -442,36 +443,64 @@ All attributes are under /sys/class/misc/acer-phn16s/.
 | --- | --- | --- |
 | cpu_fan_rpm | Read | CPU RPM |
 | gpu_fan_rpm | Read | GPU RPM |
-| profile | Read/write | quiet, balanced, performance, turbo, eco |
-| fan_control | Read/write | Write auto, maximum, or manual CPU GPU; read CPU/GPU modes, 1=Auto, 2=Maximum, 3=Manual |
-| fan_lease_ms | Read | Remaining override lease |
-| keyboard_capabilities | Read | Zone count and hexadecimal native-effect mask |
-| keyboard_effect | Read/write | Effect, brightness, speed, direction, decimal zone mask, RGB hex |
-| keyboard_timeout | Read/write | Write on/off; read seconds |
-| button_mode | Read/write | power modes or hotkey |
-| button_presses | Read | Number of recognized physical presses |
-| button_error | Read | Last button action's error code, zero for success |
-| turbo_led | Read/write | Hex RGB or off; read last setting, including auto |
-| turbo_led_mode | Read/write | auto or manual |
-| turbo_led_capabilities | Read | Fixed key-LED target, zone count, native-effect mask |
-| logo | Read/write | off; static BRIGHTNESS RGB; breathing/neon BRIGHTNESS SPEED; reapply latest cached setting |
-| logo_capabilities | Read | Cover-logo target 83, one zone, native-effect mask |
+| performance_mode | Read/write | Firmware readback: quiet, balanced, performance, turbo, eco |
+| fan_control | Read/write | Firmware readback: auto, maximum, or manual CPU GPU |
+| keyboard_lighting_capabilities | Read | Zone count and hexadecimal native-effect mask |
+| keyboard_lighting | Read/write | off; static COLOR or four COLORS, brightness=N; native EFFECT brightness=N speed=N direction=VALUE |
+| keyboard_backlight_timeout_seconds | Read/write | Firmware readback and writes: 0 or 30 seconds |
+| turbo_button_mode | Read/write | power modes or hotkey |
+| turbo_button_presses | Read | Number of recognized physical Turbo presses |
+| predatorsense_button_presses | Read | Number of recognized PredatorSense presses |
+| turbo_button_error | Read | Last button action's error code, zero for success |
+| turbo_lighting | Read/write | off; static COLOR; auto manual=COLOR, remembering the manual color; manual reselects it |
+| turbo_lighting_capabilities | Read | Fixed key-LED target, zone count, native-effect mask |
+| cover_lighting | Read/write | off; static COLOR brightness=N; breathing/neon brightness=N speed=N; reapply latest cached setting |
+| cover_lighting_capabilities | Read | Cover-logo target 83, one zone, native-effect mask |
 | sleep_status | Read | awake/sleeping/restoring/error, sleep cycles, restore attempts, last errno |
-| sleep_logo | Read/write | Next-suspend logo: off; static BRIGHTNESS RGB; breathing/neon BRIGHTNESS SPEED. Memory-only until suspend; default off |
+| sleep_cover_lighting | Read/write | Same grammar as cover_lighting, configuring next suspend; default off; no reapply command |
 | lid_state | Read | open, closed or unknown; cached ACPI lid reading |
 | lid_status | Read | Lid state, changes, transition attempts and last errno |
-| mux_mode | User read / root write | Firmware-reported mode; write optimus, nvidia or auto; restart required |
-| mux_request | Read | Last APS request/result since module load, not active display routing |
+| gpu_mux_mode | User read / root write | Firmware-reported mode; write optimus, nvidia or auto; restart required |
+| gpu_mux_request | Read | Last APS request/result since module load, not active display routing |
+| boot_effects | User read / root write | Firmware readback and writes: on or off |
+| preferences_generation | Read | Change counter, not a writable control |
+
+Read/write controls use the same grammar in both directions. Short lighting
+writes default to brightness 60, animation speed 3, and native/right direction.
+Reads include those values explicitly. Only write-only firmware lighting state
+without a known accepted setting reads `undefined`; performance, fan, MUX,
+backlight timeout and boot-effect getters query firmware and return I/O errors
+on failure, not `undefined`. Sleep lighting is a configured policy, initially Off.
+
+Keyboard Static accepts one color for all zones or four colors in zone order.
+Mixed per-zone settings use one line such as
+`zones static FF0000 brightness=50 ; off ; neon brightness=60 speed=3 direction=native ; undefined`.
+Each of its four entries targets one zone. `undefined` entries leave those zones
+untouched on writes; an entirely undefined request is rejected. Complete reads
+can be written back unchanged. These are cached accepted settings, not a physical
+color getter. Lid/sleep blackout does not replace the desired values.
+
+Version 0.4.0 removes the old filenames, including keyboard_effect/keyboard_state
+and turbo_led/turbo_led_mode/turbo_led_manual. There are no sysfs aliases. APS
+and its persistence helper translate their existing disk records to this ABI;
+saved user preferences do not need to be deleted or rewritten by hand. Upgrade
+the CLI, helper, permission rule and module together. External scripts must use
+the new filenames and grammar. This combined lighting format is a convenient
+APS ABI, not strict one-value-per-file kernel-subsystem integration.
 
 Direct writes also work as the configured normal user:
 
-    printf 'balanced\n' > /sys/class/misc/acer-phn16s/profile
-    printf 'wave 70 3 left 15 FFFFFF\n' > /sys/class/misc/acer-phn16s/keyboard_effect
-    printf 'off\n' > /sys/class/misc/acer-phn16s/keyboard_timeout
+    printf 'balanced\n' > /sys/class/misc/acer-phn16s/performance_mode
+    printf 'static FFB000 FF8C00 FF4D00 B3001B brightness=100\n' > /sys/class/misc/acer-phn16s/keyboard_lighting
+    printf 'wave brightness=70 speed=3 direction=left\n' > /sys/class/misc/acer-phn16s/keyboard_lighting
+    printf '0\n' > /sys/class/misc/acer-phn16s/keyboard_backlight_timeout_seconds
 
 The kernel is the trust boundary, regardless of which program opens sysfs:
 
-- Writes are bounded to 128 bytes and parsed into fixed typed operations.
+- Writes are bounded to 128 bytes, or 512 for a complete keyboard record, and
+  parsed into fixed typed operations before hardware I/O. A multi-zone write
+  holds the state mutex, but firmware cannot apply four reports transactionally.
+  Partial failures retain successful zones and invalidate ambiguous failed ones.
 - Extra arguments, NUL/non-ASCII data, bad numbers, unsupported effects,
   out-of-range values and invalid zone masks are rejected before hardware I/O.
 - Zones are limited to the four verified keyboard zones. Static/off reject speed
@@ -491,9 +520,9 @@ The kernel is the trust boundary, regardless of which program opens sysfs:
 - Read-only attributes are 0440; controls are 0660, root-owned with the configured
   user's primary group. Raw HID devices retain root-only access.
 
-keyboard_effect reads the last accepted frame, not queried physical keyboard
-state. In a per-zone sequence it describes the last zone frame. There is no
-verified firmware getter for current colors.
+keyboard_lighting reads all four cached zones, not just the last submitted zone.
+There is no verified firmware getter for current colors. Until a zone has been
+configured it is undefined, not assumed to be off.
 
 These checks do not prove kernel bugs impossible. Small documented unsafe blocks
 remain at the kernel C ABI. The boundary does not rely on the userspace parser,
@@ -559,16 +588,24 @@ is not a DKMS package.
     bash scripts/generate-hid-layout.sh
     bash scripts/build-kernel.sh
 
-    # Normal-user live validation; second test briefly enables Maximum.
-    cargo test --test sysfs_contract -- --ignored --test-threads=1
+    # Normal-user boundary validation, no accepted hardware writes.
+    cargo test --test sysfs_contract kernel_rejects_invalid_requests_without_changing_control_state -- --ignored --exact
+    # Changes fans temporarily, then restores their original setting.
+    cargo test --test sysfs_contract fans_persist_after_cli_exit_without_a_lease -- --ignored --exact
+
+The closed-lid and open-lid tests must be run separately in their indicated
+physical states; do not run all ignored tests together. The open-lid test writes
+back existing lighting values. Sleep-preference tests change only that memory
+policy and restore it, without suspending the machine.
 
 The module build uses locally extracted distribution Rust 1.91.1 and exact kernel
 Rust metadata. HID layout constants come from the local kernel headers; no C
 driver implementation is compiled.
 
 Verified: normal-user status/lighting/timeout/profile/fan writes; malformed direct
-sysfs writes rejected with EINVAL and no control-state change; kernel fan lease
-expiry; Secure Boot signature identity. research/PROTOCOL.md documents the
+sysfs writes rejected with EINVAL and no control-state change; Secure Boot
+signature identity. Current ABI and persistent-fan behavior have dedicated tests.
+research/PROTOCOL.md documents the
 supplied-binary and local-firmware command provenance.
 
 ## Removal

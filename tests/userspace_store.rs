@@ -12,12 +12,12 @@ fn disk_sleep_preference_restores_without_changing_awake_logo() {
     struct Restore(String);
     impl Drop for Restore {
         fn drop(&mut self) {
-            fs::write(format!("{SYSFS}/sleep_logo"), &self.0).unwrap();
+            fs::write(format!("{SYSFS}/sleep_cover_lighting"), &self.0).unwrap();
         }
     }
-    let original = fs::read_to_string(format!("{SYSFS}/sleep_logo")).unwrap();
+    let original = fs::read_to_string(format!("{SYSFS}/sleep_cover_lighting")).unwrap();
     let _restore = Restore(original.clone());
-    let awake = fs::read_to_string(format!("{SYSFS}/logo")).unwrap();
+    let awake = fs::read_to_string(format!("{SYSFS}/cover_lighting")).unwrap();
     let sleep = fs::read_to_string(format!("{SYSFS}/sleep_status")).unwrap();
     let temporary = tempfile::tempdir().unwrap();
     let dir = temporary.path().join("aps");
@@ -30,7 +30,7 @@ fn disk_sleep_preference_restores_without_changing_awake_logo() {
     )
     .unwrap();
     fs::set_permissions(&prefs, fs::Permissions::from_mode(0o600)).unwrap();
-    fs::write(format!("{SYSFS}/sleep_logo"), "off").unwrap();
+    fs::write(format!("{SYSFS}/sleep_cover_lighting"), "off").unwrap();
     let run = || {
         Command::new(env!("CARGO_BIN_EXE_aps-state"))
             .arg("restore")
@@ -45,22 +45,25 @@ fn disk_sleep_preference_restores_without_changing_awake_logo() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert_eq!(
-        fs::read_to_string(format!("{SYSFS}/sleep_logo"))
+        fs::read_to_string(format!("{SYSFS}/sleep_cover_lighting"))
             .unwrap()
             .trim(),
-        "static 17 123456"
+        "static 123456 brightness=17"
     );
-    assert_eq!(fs::read_to_string(format!("{SYSFS}/logo")).unwrap(), awake);
+    assert_eq!(
+        fs::read_to_string(format!("{SYSFS}/cover_lighting")).unwrap(),
+        awake
+    );
     assert_eq!(
         fs::read_to_string(format!("{SYSFS}/sleep_status")).unwrap(),
         sleep
     );
-    fs::write(format!("{SYSFS}/sleep_logo"), &original).unwrap();
+    fs::write(format!("{SYSFS}/sleep_cover_lighting"), &original).unwrap();
     let generation = fs::read_to_string(format!("{SYSFS}/preferences_generation")).unwrap();
     fs::write(&prefs, "APS-USERSPACE-STATE-1\nsleep_logo=opmode 60\n").unwrap();
     assert!(!run().status.success());
     assert_eq!(
-        fs::read_to_string(format!("{SYSFS}/sleep_logo")).unwrap(),
+        fs::read_to_string(format!("{SYSFS}/sleep_cover_lighting")).unwrap(),
         original
     );
     assert_eq!(

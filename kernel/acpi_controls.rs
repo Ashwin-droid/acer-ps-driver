@@ -143,6 +143,20 @@ pub(crate) fn set_boot_effects(value: crate::boot_policy::Effects) -> Result<()>
 pub(crate) fn fan_state() -> Result<u64> {
     execute(Request::Fans)
 }
+pub(crate) fn fan_setting() -> Result<Fans> {
+    let state = fan_state()?;
+    match (state & 3, (state >> 6) & 3) {
+        (1, 1) => Ok(Fans::Auto),
+        (2, 2) => Ok(Fans::Maximum),
+        (3, 3) => {
+            let cpu = execute(Request::Speed(false))?;
+            let gpu = execute(Request::Speed(true))?;
+            if !(40..=100).contains(&cpu) || !(40..=100).contains(&gpu) { return Err(EIO); }
+            Ok(Fans::Manual(cpu as u8, gpu as u8))
+        }
+        _ => Err(EIO),
+    }
+}
 pub(crate) fn auto() -> Result<()> {
     execute(Request::SetFans(1))?;
     if execute(Request::Fans)? & 0xc3 != 0x41 {

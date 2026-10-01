@@ -8,6 +8,8 @@ trap '"$control" profile balanced; "$control" fans auto' EXIT
 "$control" profile quiet
 "$control" status
 "$control" profile balanced
-"$control" fans maximum 6
-"$control" fans manual 55 55 6
+"$control" fans maximum
+sleep 6
+"$control" fans manual 55 55
+sleep 6
 "$control" status
