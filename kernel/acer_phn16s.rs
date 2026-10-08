@@ -21,6 +21,9 @@ mod hardware_hid;
 #[path = "../src/protocol.rs"]
 mod protocol;
 mod sense_key;
+mod events;
+#[path = "../src/event_policy.rs"]
+mod event_policy;
 mod sleep;
 #[path = "../src/sleep_state.rs"]
 mod sleep_state;
@@ -123,6 +126,7 @@ static ATTRS: &[Attribute] = &[
     attr(c"sleep_cover_lighting", true),
     attr(c"lid_state", false),
     attr(c"lid_status", false),
+    attr(c"work_status", false),
     root_control(c"gpu_mux_mode"),
     root_control(c"boot_effects"),
     attr(c"gpu_mux_request", false),
@@ -166,6 +170,10 @@ fn profile_name(value: u64) -> Result<&'static str> {
 }
 
 fn read_control(name: &[u8], state: &State, out: &mut Output) -> Result<()> {
+    if name == b"work_status" {
+        let (runs, timer_runs) = events::counters();
+        return writeln!(out, "runs={} timer_runs={}", runs, timer_runs).map_err(|_| EOVERFLOW);
+    }
     if name == b"boot_effects" {
         if state.sleep.sleeping { return Err(EBUSY); }
         return writeln!(out, "{}", acpi_controls::boot_effects()?.name()).map_err(|_| EOVERFLOW);
@@ -420,11 +428,14 @@ unsafe extern "C" fn store(
         if name.to_bytes()==b"dev_probe" {
             let result=run_probe(input,&mut state);
             state.developer.last_error=result.as_ref().err().map_or(0,|e|e.to_errno());
+            schedule_pending(&state);
             result?;
             return Ok(count as isize);
         }
         if count>128 && name.to_bytes()!=b"keyboard_lighting" { return Err(EINVAL); }
-        write_control(name.to_bytes(), input, &mut state)?;
+        let result = write_control(name.to_bytes(), input, &mut state);
+        schedule_pending(&state);
+        result?;
         // Boot GPU selection belongs to firmware, never the lighting/profile
         // preference file. Do not cause aps-state to capture/replay it.
         if !matches!(name.to_bytes(), b"gpu_mux_mode" | b"boot_effects") {
@@ -468,6 +479,9 @@ fn sleep_event(prepare: bool, suspend: bool) {
     let mut state = unsafe { &*pointer }.lock();
     if prepare {
         if !state.sleep.prepare() { return; }
+        events::pause();
+        turbo_button::discard_presses();
+        events::arm(None, now());
         state.logo_recovery.cancel();
         // These temporary hardware writes deliberately bypass cache/generation
         // updates. Userspace persistence continues to see the intended colors.
@@ -496,10 +510,17 @@ fn sleep_event(prepare: bool, suspend: bool) {
         let logo_action = if lighting.logo == control::Logo::Off { "off" } else { "configured sleep effect" };
         pr_info!("acer_phn16s: sleep lighting submitted: logo={}, internal LEDs off, error={}\n", logo_action, error);
     } else if state.sleep.resume(now()) {
-        turbo_button::take_press();
-        turbo_button::take_sense_press();
+        turbo_button::discard_presses();
+        events::resume();
         pr_info!("acer_phn16s: wake RGB restore queued after 2s settling\n");
     }
+    schedule_pending(&state);
+}
+
+fn schedule_pending(state: &State) {
+    events::arm(event_policy::deadline(state.sleep.sleeping, state.sleep.deadline(),
+        state.lid.deadline(), state.lid.allowed(), state.logo_recovery.deadline(),
+        state.logo.is_some()), now());
 }
 
 fn refresh_lid(state: &mut State) {
@@ -597,80 +618,63 @@ fn recover_eco_logo(state: &mut State) {
         state.logo_recovery.attempts, result.err().map_or(0, |e| e.to_errno()));
 }
 
-unsafe extern "C" fn watchdog(data: *mut kernel::ffi::c_void) -> i32 {
-    // SAFETY: Module owns this pinned Mutex until kthread_stop returns.
-    let state = unsafe { &*data.cast::<Mutex<State>>() };
-    while !unsafe { bindings::kthread_should_stop() } {
-        {
-            let mut guard = state.lock();
-            if guard.sleep.sleeping {
-                // Drain transient presses so sleep/wake cannot replay a mode
-                // change. Never wait with the mutex held.
-                turbo_button::take_press();
-                turbo_button::take_sense_press();
-                drop(guard);
-                unsafe { bindings::msleep(250) };
-                continue;
-            }
-            if now() >= guard.lid.polls_after { refresh_lid(&mut guard); }
-            if turbo_button::take_sense_press() {
-                if let Err(error) = turbo_button::emit_f15() {
-                    pr_err!(
-                        "acer_phn16s: PredatorSense key action failed: {}\n",
-                        error.to_errno()
-                    );
-                }
-            }
-            if turbo_button::take_press() {
-                let result = match guard.button_mode {
-                    control::ButtonMode::Hotkey => turbo_button::emit_f14(),
-                    control::ButtonMode::PowerModes => {
-                        acpi_controls::profile().and_then(|current| {
-                            let next =
-                                control::next_profile(current, turbo_button::on_ac()).ok_or(EIO)?;
-                            set_profile_with_lid(next, &mut guard)
-                        })
-                    }
-                };
-                guard.button_error = match result {
-                    Ok(()) => {
-                        if guard.button_mode == control::ButtonMode::PowerModes {
-                            guard.generation = guard.generation.wrapping_add(1);
-                        }
-                        0
-                    }
-                    Err(error) => error.to_errno(),
-                };
-                if guard.button_error != 0 {
-                    pr_err!(
-                        "acer_phn16s: Turbo button action failed: {}\n",
-                        guard.button_error
-                    );
-                }
-            }
-            if guard.sleep.ready(now()) {
-                restore_rgb(&mut guard);
-            } else if guard.lid.ready(now())
-                && (!guard.lid.allowed() || guard.sleep.phase() != "restoring") {
-                let error = apply_internal_rgb(&guard);
-                guard.lid.completed(now(), error);
-                pr_info!("acer_phn16s: lid {} lighting applied, error={}\n", guard.lid.name(), error);
-            }
-            recover_eco_logo(&mut guard);
-        }
-        unsafe { bindings::msleep(250) };
+fn run_work() {
+    let pointer = STATE.load(Ordering::Acquire);
+    if pointer.is_null() { return; }
+    // SAFETY: Work is drained before clearing/freeing the pinned State.
+    let mut guard = unsafe { &*pointer }.lock();
+    if !events::accepting() || guard.sleep.sleeping {
+        turbo_button::discard_presses();
+        return;
     }
-    0
+    if events::take_lid_change() { refresh_lid(&mut guard); }
+    for _ in 0..8 {
+        if turbo_button::take_sense_press() {
+            if let Err(error) = turbo_button::emit_f15() {
+                pr_err!("acer_phn16s: PredatorSense key action failed: {}\n", error.to_errno());
+            }
+        }
+        if turbo_button::take_press() {
+            let result = match guard.button_mode {
+                control::ButtonMode::Hotkey => turbo_button::emit_f14(),
+                control::ButtonMode::PowerModes => {
+                    acpi_controls::profile().and_then(|current| {
+                        let next = control::next_profile(current, turbo_button::on_ac()).ok_or(EIO)?;
+                        set_profile_with_lid(next, &mut guard)
+                    })
+                }
+            };
+            guard.button_error = match result {
+                Ok(()) => {
+                    if guard.button_mode == control::ButtonMode::PowerModes {
+                        guard.generation = guard.generation.wrapping_add(1);
+                    }
+                    0
+                }
+                Err(error) => error.to_errno(),
+            };
+            if guard.button_error != 0 {
+                pr_err!("acer_phn16s: Turbo button action failed: {}\n", guard.button_error);
+            }
+        }
+    }
+    if guard.sleep.ready(now()) {
+        restore_rgb(&mut guard);
+    } else if guard.lid.ready(now())
+        && (!guard.lid.allowed() || guard.sleep.phase() != "restoring") {
+        let error = apply_internal_rgb(&guard);
+        guard.lid.completed(now(), error);
+        pr_info!("acer_phn16s: lid {} lighting applied, error={}\n", guard.lid.name(), error);
+    }
+    recover_eco_logo(&mut guard);
+    schedule_pending(&guard);
+    if turbo_button::pending() { events::queue(); }
 }
 
-struct Thread(*mut bindings::task_struct);
-// SAFETY: Only module ownership starts/stops the thread; shared state is synchronized by Mutex.
-unsafe impl Send for Thread {}
-unsafe impl Sync for Thread {}
 struct AcerModule {
     device: Pin<KBox<MiscDeviceRegistration<Anchor>>>,
     state: Pin<KBox<Mutex<State>>>,
-    thread: Option<Thread>,
+    events: Option<events::Registration>,
     created: usize,
     button: Option<turbo_button::Registration>,
     sense: Option<sense_key::Registration>,
@@ -716,7 +720,7 @@ impl kernel::Module for AcerModule {
         let mut module = Self {
             device,
             state,
-            thread: None,
+            events: None,
             created: 0,
             button: None,
             sense: None,
@@ -724,23 +728,10 @@ impl kernel::Module for AcerModule {
         };
         let pointer = module.state.as_ref().get_ref() as *const Mutex<State> as *mut Mutex<State>;
         STATE.store(pointer, Ordering::Release);
+        module.events = Some(events::Registration::new()?);
         module.sleep = Some(sleep::Registration::new()?);
         module.button = Some(turbo_button::Registration::new(this_module)?);
         module.sense = Some(sense_key::Registration::new()?);
-        // SAFETY: Pinned state outlives the thread. Fixed name has no variadic substitutions.
-        let thread = unsafe {
-            bindings::kthread_create_on_node(
-                Some(watchdog),
-                pointer.cast(),
-                -1,
-                c"acer-phn16s".as_char_ptr(),
-            )
-        };
-        if thread.is_null() || (thread as usize) >= usize::MAX - 4095 {
-            return Err(ENOMEM);
-        }
-        module.thread = Some(Thread(thread));
-        unsafe { bindings::wake_up_process(thread) };
         for attribute in ATTRS {
             // SAFETY: Device is initialized and stable; attributes remain static until removal.
             let rc = unsafe {
@@ -751,7 +742,8 @@ impl kernel::Module for AcerModule {
             }
             module.created += 1;
         }
-        pr_info!("acer_phn16s: typed sysfs controls ready; kernel lid monitoring active\n");
+        events::lid_changed();
+        pr_info!("acer_phn16s: typed sysfs controls ready; event-driven key/lid work active\n");
         #[cfg(aps_dev)]
         pr_warn!("acer_phn16s: DEVELOPMENT BUILD: signed raw firmware calls enabled\n");
         Ok(module)
@@ -759,6 +751,8 @@ impl kernel::Module for AcerModule {
 }
 impl Drop for AcerModule {
     fn drop(&mut self) {
+        // Serialize STOPPING with running work and deadline updates.
+        { let _state = self.state.lock(); events::stop(); }
         // Drain PM callbacks before tearing down the worker, devices or state.
         // No State lock may be held while unregister waits for callbacks.
         drop(self.sleep.take());
@@ -768,14 +762,11 @@ impl Drop for AcerModule {
                 bindings::device_remove_file((*self.device.as_raw()).this_device, &attribute.0)
             };
         }
-        if let Some(thread) = self.thread.take() {
-            unsafe { bindings::kthread_stop(thread.0) };
-        }
         drop(self.sense.take());
-        if let Some(mut button) = self.button.take() {
-            button.detach();
-            drop(button);
-        }
+        if let Some(button) = &mut self.button { button.detach(); }
+        // Producers are drained; work must stop before the input device is freed.
+        drop(self.events.take());
+        drop(self.button.take());
         STATE.store(core::ptr::null_mut(), Ordering::Release);
     }
 }

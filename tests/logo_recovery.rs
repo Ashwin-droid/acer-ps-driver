@@ -13,6 +13,7 @@ const ORANGE: Logo = Logo::Static {
 #[test]
 fn eco_waits_and_uses_latest_setting_including_off_and_animations() {
     let mut state = LogoRecovery::default();
+    assert_eq!(state.deadline(), None);
     assert_eq!(state.setting(u64::MAX, Some(ORANGE), false), None);
     state.profile_changed(Some(6), 100);
     assert_eq!(

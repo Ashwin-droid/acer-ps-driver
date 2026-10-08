@@ -4,7 +4,6 @@
 #[derive(Default)]
 pub(crate) struct LidState {
     pub(crate) open: Option<bool>,
-    pub(crate) polls_after: u64,
     pub(crate) changes: u64,
     pub(crate) attempts: u8,
     pub(crate) error: i32,
@@ -19,7 +18,6 @@ impl LidState {
             1 => Some(true),
             _ => None,
         };
-        self.polls_after = now.saturating_add(500_000_000);
         let changed = !self.initialized || self.open != open;
         if changed {
             self.initialized = true;
@@ -47,6 +45,9 @@ impl LidState {
     }
     pub(crate) fn ready(&self, now: u64) -> bool {
         self.pending.is_some_and(|due| now >= due)
+    }
+    pub(crate) fn deadline(&self) -> Option<u64> {
+        self.pending
     }
     pub(crate) fn completed(&mut self, now: u64, error: i32) {
         self.attempts = self.attempts.saturating_add(1);

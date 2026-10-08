@@ -362,8 +362,10 @@ verification remain separate from a successful command response.
 
 ### Closed-lid use
 
-The kernel queries the ACPI lid sensor every 500 ms while awake, and checks it
-again before keyboard RGB, keyboard timeout, or Turbo LED writes. Closing the lid
+The kernel observes the ACPI button input device's EV_SW/SW_LID events and queues
+work to read the authoritative ACPI lid state. It samples once at registration
+and after resume, and checks synchronously before keyboard RGB, keyboard timeout,
+or Turbo LED writes. There is no periodic lid query. Closing the lid
 blacks out only the built-in keyboard and Turbo LED. Opening it restores their
 cached settings. The cover logo, displays, external input devices, fans and
 performance controls are not disabled by this policy.
@@ -385,7 +387,7 @@ Closed-lid boot defers the affected preference writes in the user-account servic
 preserving them on disk while still saving other controls. The service retries at
 five-second intervals; the first opening after a docked boot can therefore take
 up to five seconds to restore those preferences. Normal subsequent lid changes
-use the kernel's half-second polling interval. Performance writes reassert the
+schedule work from the input callback without a polling interval. Performance writes reassert the
 closed-lid blackout immediately and again after the firmware's mode indication.
 Resume also checks the lid, so waking docked keeps internal lighting off while
 restoring the back logo. None of this changes your desktop's lid/suspend policy.
@@ -464,6 +466,7 @@ All attributes are under /sys/class/misc/acer-phn16s/.
 | gpu_mux_request | Read | Last APS request/result since module load, not active display routing |
 | boot_effects | User read / root write | Firmware readback and writes: on or off |
 | preferences_generation | Read | Change counter, not a writable control |
+| work_status | Read | Event-work and one-shot deadline execution counters; reads do not schedule work |
 
 Read/write controls use the same grammar in both directions. Short lighting
 writes default to brightness 60, animation speed 3, and native/right direction.
@@ -487,6 +490,20 @@ saved user preferences do not need to be deleted or rewritten by hand. Upgrade
 the CLI, helper, permission rule and module together. External scripts must use
 the new filenames and grammar. This combined lighting format is a convenient
 APS ABI, not strict one-value-per-file kernel-subsystem integration.
+
+Since DKMS 0.5.1, Turbo HID and PredatorSense input callbacks directly queue
+shared unbound workqueue work. There is no dedicated APS kthread or 250 ms queue-check
+loop. ACPI/HID operations remain in sleepable process context, under the state
+mutex. Input callbacks do not perform firmware calls. SW_LID is observed without
+consuming the event, so logind retains its normal lid policy.
+
+One-shot delayed work remains for wake/Eco settling and bounded RGB retries.
+No deadline is armed while idle or sleeping, and blocked wake recovery cannot
+requeue an already-due deadline in a busy loop. Suspend discards queued presses;
+teardown stops/drains input, HID, PM and sysfs producers, cancels delayed/immediate
+work synchronously, then frees the virtual input device and state. Workqueues
+have scheduling latency; this removes the artificial polling delay, not all latency.
+The userspace preference service has its own save/restore checks, unchanged here.
 
 Direct writes also work as the configured normal user:
 

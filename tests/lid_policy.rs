@@ -12,7 +12,7 @@ fn closed_at_boot_is_detected_without_an_input_event() {
     lid.completed(1, 0);
     assert!(!lid.observe(0, 2));
     assert!(!lid.ready(u64::MAX));
-    assert_eq!(lid.polls_after, 500_000_002);
+    assert_eq!(lid.deadline(), None);
 }
 
 #[test]

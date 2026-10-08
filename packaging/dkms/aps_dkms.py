@@ -10,7 +10,7 @@ import sys
 import tempfile
 
 PACKAGE = "acer-phn16s"
-VERSION = "0.4.0"
+VERSION = "0.5.1"
 ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}
 CACHE = Path("/var/cache/aps-dkms")
 CERT = Path("/var/lib/shim-signed/mok/MOK.der")

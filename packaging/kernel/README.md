@@ -21,7 +21,7 @@ The account's primary group receives access to these attributes under
 - Read: cpu_fan_rpm, gpu_fan_rpm, keyboard_lighting_capabilities,
   turbo_button_presses, predatorsense_button_presses, turbo_button_error,
   turbo_lighting_capabilities, preferences_generation, cover_lighting_capabilities,
-  sleep_status, lid_state, lid_status, gpu_mux_request.
+  sleep_status, lid_state, lid_status, work_status, gpu_mux_request.
 - Read/write: performance_mode, fan_control, keyboard_lighting,
   keyboard_backlight_timeout_seconds, turbo_button_mode, turbo_lighting,
   cover_lighting, sleep_cover_lighting.
@@ -72,7 +72,8 @@ remain off until configured; the normal boot preference service populates the ca
 Native effects restart their animation on wake. A running software effect still
 needs its userspace process; the kernel restores its last accepted frame only.
 
-While awake, the worker samples the kernel ACPI lid query every 500 ms. Closing
+The matched ACPI Lid Switch input device's SW_LID callback queues work to sample
+the ACPI getter. Registration and resume also sample once; nothing polls. Closing
 the lid switches off keyboard and Turbo RGB, without changing cached intent or
 the cover logo. Opening restores those two components. Keyboard effect/timeout
 and Turbo LED writes check the sensor synchronously and return EHOSTDOWN while
@@ -81,6 +82,13 @@ expose status; there is no lid override. Normal profile/fan/logo controls remain
 available. Profile writes reassert the blackout immediately and after two seconds
 to handle firmware Turbo indication. Suspend prevents sensor access; wake checks
 the lid before restoring internal RGB. Production raw endpoints remain absent.
+
+Turbo HID and PredatorSense input callbacks also queue immediate work, replacing
+the 250 ms pending-key loop and private kthread. Firmware operations run in
+process context, never directly in the atomic input callbacks. Lid events are
+not consumed. One-shot delayed work preserves existing settling/retry deadlines
+and becomes unarmed when idle. `work_status` exposes execution counters so this
+can be checked without tracing or changing hardware.
 
 Cover-logo writes use only target 0x83 and the verified zero zone mask. Accepted
 settings are off, static brightness/RGB, and native RGB-cycling breathing/neon.

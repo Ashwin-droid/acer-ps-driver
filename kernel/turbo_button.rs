@@ -123,7 +123,7 @@ unsafe extern "C" fn raw_event(
     data: *mut u8,
     size: i32,
 ) -> i32 {
-    if !ACTIVE.load(Ordering::Acquire) || size != 3 || data.is_null() {
+    if !ACTIVE.load(Ordering::Acquire) || !crate::events::accepting() || size != 3 || data.is_null() {
         return 0;
     }
     // SAFETY: HID core supplies size readable bytes, and we read only an exact three-byte report.
@@ -151,6 +151,7 @@ unsafe extern "C" fn raw_event(
     let _ = pending.fetch_update(Ordering::AcqRel, Ordering::Relaxed, |value| {
         Some(value.saturating_add(1).min(8))
     });
+    crate::events::queue();
     // Returning zero preserves normal HID parsing and all unrelated keyboard reports.
     0
 }
@@ -172,10 +173,19 @@ pub(crate) fn sense_presses() -> u64 {
     SENSE_PRESSES.load(Ordering::Relaxed)
 }
 pub(crate) fn queue_sense_press() {
+    if !crate::events::accepting() { return; }
     SENSE_PRESSES.fetch_add(1, Ordering::Relaxed);
     let _ = SENSE_PENDING.fetch_update(Ordering::AcqRel, Ordering::Relaxed, |n| {
         Some(n.saturating_add(1).min(8))
     });
+    crate::events::queue();
+}
+pub(crate) fn discard_presses() {
+    PENDING.store(0, Ordering::Release);
+    SENSE_PENDING.store(0, Ordering::Release);
+}
+pub(crate) fn pending() -> bool {
+    PENDING.load(Ordering::Acquire) != 0 || SENSE_PENDING.load(Ordering::Acquire) != 0
 }
 pub(crate) fn on_ac() -> bool {
     unsafe { power_supply_is_system_supplied() > 0 }
@@ -194,7 +204,7 @@ fn emit_key(key: u32) -> Result<()> {
     if input.is_null() {
         return Err(ENODEV);
     }
-    // SAFETY: The worker stops before this input device is freed. F14 is the sole synthesized key.
+    // SAFETY: Work is drained before this input device is freed. Only F14/F15 are emitted.
     unsafe {
         input_event(input, 1, key, 1);
         input_event(input, 0, 0, 0);

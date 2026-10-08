@@ -12,6 +12,9 @@ pub(crate) struct LogoRecovery {
 }
 
 impl LogoRecovery {
+    pub(crate) fn deadline(&self) -> Option<u64> {
+        self.due
+    }
     pub(crate) fn cancel(&mut self) {
         self.due = None;
         self.attempts = 0;

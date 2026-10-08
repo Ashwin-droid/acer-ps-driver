@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-//! Filter only KEY_PRESENTATION from this laptop's AT keyboard; queue fixed F15.
+//! Observe ACPI SW_LID and filter only KEY_PRESENTATION on the built-in keyboard.
 use kernel::prelude::*;
 #[allow(dead_code, non_camel_case_types, unreachable_pub)]
 mod layout {
@@ -24,7 +24,7 @@ struct Handle {
 }
 #[repr(C, align(8))]
 struct Ids {
-    bytes: [u8; 2 * layout::PH_INPUT_ID_SIZE as usize],
+    bytes: [u8; 3 * layout::PH_INPUT_ID_SIZE as usize],
 }
 unsafe extern "C" fn matches(_: *mut Void, device: *mut Void) -> bool {
     // SAFETY: Input core supplies a live device; identity strings have device lifetime.
@@ -41,10 +41,17 @@ unsafe extern "C" fn matches(_: *mut Void, device: *mut Void) -> bool {
     };
     !name.is_null()
         && !phys.is_null()
-        && unsafe { CStr::from_char_ptr(name) } == c"AT Translated Set 2 keyboard"
-        && unsafe { CStr::from_char_ptr(phys) } == c"isa0060/serio0/input0"
+        && ((unsafe { CStr::from_char_ptr(name) } == c"AT Translated Set 2 keyboard"
+            && unsafe { CStr::from_char_ptr(phys) } == c"isa0060/serio0/input0")
+            || (unsafe { CStr::from_char_ptr(name) } == c"Lid Switch"
+            && unsafe { CStr::from_char_ptr(phys) } == c"PNP0C0D/button/input0"))
 }
 unsafe extern "C" fn filter(_: *mut Void, kind: u32, code: u32, value: i32) -> bool {
+    if kind == 5 && code == 0 && matches!(value, 0 | 1) {
+        // EV_SW/SW_LID triggers an authoritative ACPI sample in process context.
+        crate::events::lid_changed();
+        return false; // Preserve delivery to logind and other listeners.
+    }
     if kind != 1 || code != 425 {
         return false;
     }
@@ -83,7 +90,9 @@ unsafe extern "C" fn connect(handler: *mut Void, device: *mut Void, _: *const Vo
             return Err(Error::from_errno(result));
         }
         let _ = KBox::into_raw(handle);
-        pr_info!("acer_phn16s: PredatorSense AT-keyboard filter attached\n");
+        // Registration need not replay the current switch state. Sample once.
+        crate::events::lid_changed();
+        pr_info!("acer_phn16s: built-in hotkey/lid input observer attached\n");
         Ok(())
     })();
     match result {
@@ -98,6 +107,7 @@ unsafe extern "C" fn disconnect(handle: *mut Void) {
         input_unregister_handle(handle);
         drop(KBox::from_raw(handle.cast::<Handle>()));
     }
+    crate::events::lid_changed();
 }
 pub(crate) struct Registration {
     handler: KBox<Handler>,
@@ -115,7 +125,7 @@ impl Registration {
         )?;
         let mut ids = KBox::new(
             Ids {
-                bytes: [0; 2 * layout::PH_INPUT_ID_SIZE as usize],
+                bytes: [0; 3 * layout::PH_INPUT_ID_SIZE as usize],
             },
             GFP_KERNEL,
         )?;
@@ -124,6 +134,9 @@ impl Registration {
             *p.add(layout::PH_INPUT_ID_FLAGS as usize).cast::<usize>() =
                 layout::PH_INPUT_MATCH_BUS as usize;
             *p.add(layout::PH_INPUT_ID_BUS as usize).cast::<u16>() = 0x11;
+            let lid = p.add(layout::PH_INPUT_ID_SIZE as usize);
+            *lid.add(layout::PH_INPUT_ID_FLAGS as usize).cast::<usize>() = layout::PH_INPUT_MATCH_BUS as usize;
+            *lid.add(layout::PH_INPUT_ID_BUS as usize).cast::<u16>() = 0x19;
         }
         let p = handler.bytes.as_mut_ptr();
         // SAFETY: Exact-size aligned zeroed objects, static callbacks and strings. The id

@@ -20,14 +20,27 @@ FILES = [
     "kernel/sleep.rs", "kernel/turbo_button.rs", "src/control.rs", "src/protocol.rs",
     "src/boot_policy.rs", "src/mux.rs", "src/lid_state.rs", "src/sleep_state.rs",
     "src/logo_recovery.rs",
-    "src/interface.rs",
+    "src/interface.rs", "src/event_policy.rs", "kernel/events.rs",
     "research/firmware/acer-ec-hid-descriptor.bin", "research/firmware/enek5130-descriptor.bin",
     "packaging/dkms/aps_dkms.py", "packaging/dkms/check-install",
 ]
 
 
+def verify_installed(release):
+    installed = Path(dkms.run(["modinfo", "-n", "acer_phn16s"]))
+    expected = Path(f"/lib/modules/{release}/updates/dkms") / installed.name
+    dkms.require(installed == expected, "Module resolution did not select this kernel's DKMS installation")
+    built = Path(f"/var/lib/dkms/{dkms.PACKAGE}/{dkms.VERSION}/{release}/x86_64/module") / installed.name
+    dkms.require(hashlib.sha256(dkms.trusted(installed).read_bytes()).digest()
+                 == hashlib.sha256(dkms.trusted(built).read_bytes()).digest(),
+                 "Installed module bytes do not match the signed DKMS build")
+
+
 def install():
     dkms.require(os.geteuid() == 0, "Run this installer as root")
+    # mkdir(parents=True) applies its mode only to the final directory. Do not
+    # inherit a desktop user's 0002 umask for intermediate snapshot directories.
+    os.umask(0o022)
     release = dkms.kernel_name(os.uname().release)
     for name, expected in [("product_name", "Predator PHN16S-71"), ("board_name", "FTYPE_ARX"),
                            ("bios_version", "V1.28")]:
@@ -81,6 +94,7 @@ def install():
     state = dkms.run([*command, "status", *common])
     if f"{dkms.PACKAGE}/{dkms.VERSION}, {release}, x86_64: installed" in state.splitlines():
         dkms.pre_install(release, "x86_64")
+        verify_installed(release)
         print("APS DKMS is already installed with this exact source snapshot.")
         return
     if not state:
@@ -103,14 +117,16 @@ def install():
                      "Module backup verification failed")
         old.unlink()
     try:
-        dkms.run([*command, "install", *common, "-k", release], capture=False, timeout=600)
+        # Rust submodule-only edits can leave srcversion unchanged. DKMS can
+        # otherwise skip copying the new unversioned .ko yet mark it installed.
+        # The exact replacement has already passed signer/vermagic validation.
+        dkms.run([*command, "install", *common, "-k", release, "--force"], capture=False, timeout=600)
     except (OSError, subprocess.SubprocessError):
         if backup is not None:
             shutil.copy2(backup, old)
             dkms.run(["/usr/sbin/depmod", release])
         raise
-    dkms.require("/updates/dkms/" in dkms.run(["modinfo", "-n", "acer_phn16s"]),
-                 "Module resolution did not select the DKMS installation")
+    verify_installed(release)
     print("APS DKMS installed. The running module was not unloaded or reloaded.")
     if backup is not None:
         print(f"Previous non-DKMS module retained at {backup}")

@@ -26,6 +26,7 @@ fn sleep_logo_never_replaces_awake_cache_on_wake_or_abort() {
     let awake = control::logo(b"static 100 FF8C00").unwrap();
     let configured = control::sleep_logo(b"static 25 0000FF").unwrap();
     let mut state = SleepState::default();
+    assert_eq!(state.deadline(), None);
     state.prepare();
     assert_eq!(
         sleep_state::SleepLighting::new(configured, true).logo,

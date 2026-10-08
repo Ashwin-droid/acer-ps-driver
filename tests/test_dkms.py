@@ -9,11 +9,39 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("aps_dkms", ROOT / "packaging/dkms/aps_dkms.py")
 helper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(helper)
+installer_spec = importlib.util.spec_from_file_location("aps_installer", ROOT / "scripts/install-aps-dkms.py")
+installer = importlib.util.module_from_spec(installer_spec)
+installer_spec.loader.exec_module(installer)
 RELEASE = "7.1.5-76070105-generic"
 RUST = "rustc 1.91.1 (ed61e7d7e 2025-11-07) (built from a source tarball)"
 
 
 class DkmsPolicy(unittest.TestCase):
+    def test_snapshot_directories_do_not_inherit_a_group_writable_umask(self):
+        with patch.object(installer.os, "geteuid", return_value=0), \
+             patch.object(installer.os, "umask") as umask, \
+             patch.object(installer.dkms, "kernel_name", side_effect=RuntimeError("stop before filesystem access")):
+            with self.assertRaisesRegex(RuntimeError, "stop before filesystem"):
+                installer.install()
+            umask.assert_called_once_with(0o022)
+
+    def test_installed_bytes_must_match_build_not_just_srcversion(self):
+        installed = f"/lib/modules/{RELEASE}/updates/dkms/acer_phn16s.ko.zst"
+        built = f"/var/lib/dkms/acer-phn16s/{installer.dkms.VERSION}/{RELEASE}/x86_64/module/acer_phn16s.ko.zst"
+        contents = {installed: b"old signed module", built: b"new signed module"}
+        with patch.object(installer.dkms, "run", return_value=installed), \
+             patch.object(installer.dkms, "trusted", side_effect=Path), \
+             patch.object(Path, "read_bytes", autospec=True, side_effect=lambda path: contents[str(path)]):
+            with self.assertRaisesRegex(RuntimeError, "bytes do not match"):
+                installer.verify_installed(RELEASE)
+            contents[installed] = contents[built]
+            installer.verify_installed(RELEASE)
+
+    def test_installed_module_must_resolve_to_this_kernel_dkms_path(self):
+        with patch.object(installer.dkms, "run", return_value="/tmp/acer_phn16s.ko.zst"):
+            with self.assertRaisesRegex(RuntimeError, "Module resolution"):
+                installer.verify_installed(RELEASE)
+
     def test_target_kernel_names_cannot_escape_paths_or_commands(self):
         for value in [RELEASE, "7.1.6-76070106-generic", "7.2.0-rc1"]:
             self.assertEqual(helper.kernel_name(value), value)

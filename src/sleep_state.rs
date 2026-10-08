@@ -70,6 +70,9 @@ impl SleepState {
     pub(crate) fn ready(&self, now: u64) -> bool {
         !self.sleeping && self.due.is_some_and(|due| now >= due)
     }
+    pub(crate) fn deadline(&self) -> Option<u64> {
+        self.due
+    }
 
     pub(crate) fn completed(&mut self, now: u64, error: i32) {
         self.attempts = self.attempts.saturating_add(1);
