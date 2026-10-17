@@ -17,6 +17,19 @@ RUST = "rustc 1.91.1 (ed61e7d7e 2025-11-07) (built from a source tarball)"
 
 
 class DkmsPolicy(unittest.TestCase):
+    def test_sysfs_initializers_follow_target_bindings_not_kernel_version(self):
+        old = 'pub struct device_attribute { pub attr: attribute, pub show: Show, pub store: Store, }'
+        self.assertEqual(helper.attribute_flags(old), [])
+        base = 'pub struct device_attribute { pub attr: attribute, pub __bindgen_anon_1: A, pub __bindgen_anon_2: B, }'
+        for kind, flags in [('union', ['--cfg', 'aps_attr_alternatives']),
+                            ('struct', ['--cfg', 'aps_attr_alternatives', '--cfg', 'aps_attr_cfi'])]:
+            text = (base + f'pub {kind} device_attribute__bindgen_ty_1 {{ pub show: Show, pub show_const: ConstShow, }}'
+                    + f'pub {kind} device_attribute__bindgen_ty_2 {{ pub store: Store, pub store_const: ConstStore, }}')
+            self.assertEqual(helper.attribute_flags(text), flags)
+        for bad in ['', base, old.replace('show:', 'new_show:'), old.replace('pub attr:', 'pub extra: usize, pub attr:')]:
+            with self.assertRaises(RuntimeError):
+                helper.attribute_flags(bad)
+
     def test_snapshot_directories_do_not_inherit_a_group_writable_umask(self):
         with patch.object(installer.os, "geteuid", return_value=0), \
              patch.object(installer.os, "umask") as umask, \
@@ -38,9 +51,17 @@ class DkmsPolicy(unittest.TestCase):
             installer.verify_installed(RELEASE)
 
     def test_installed_module_must_resolve_to_this_kernel_dkms_path(self):
-        with patch.object(installer.dkms, "run", return_value="/tmp/acer_phn16s.ko.zst"):
+        with patch.object(installer.dkms, "run", return_value="/tmp/acer_phn16s.ko.zst") as run:
             with self.assertRaisesRegex(RuntimeError, "Module resolution"):
                 installer.verify_installed(RELEASE)
+            run.assert_called_once_with(["modinfo", "-k", RELEASE, "-n", "acer_phn16s"])
+
+    def test_installer_validates_explicit_target_before_touching_system_files(self):
+        with patch.object(installer.os, "geteuid", return_value=0), \
+             patch.object(installer.os, "umask"), \
+             patch.object(installer.os, "uname", side_effect=AssertionError("must use explicit target")):
+            with self.assertRaisesRegex(RuntimeError, "Invalid kernel release"):
+                installer.install("../bad-target")
 
     def test_target_kernel_names_cannot_escape_paths_or_commands(self):
         for value in [RELEASE, "7.1.6-76070106-generic", "7.2.0-rc1"]:
@@ -87,9 +108,18 @@ class DkmsPolicy(unittest.TestCase):
         text = 'pub const PH_HID_SIZE : u32 = 9 ; pub const PH_DRIVER_SIZE: u32 = 10;'
         self.assertEqual(set(re.findall(r"pub\s+const\s+(PH_[A-Z0-9_]+)\s*:", text)),
                          {"PH_HID_SIZE", "PH_DRIVER_SIZE"})
-        args = helper.clang_args(Path("/headers/next-kernel"))
+        args = helper.clang_args(Path("/headers/next-kernel"), {})
         self.assertIn("-I/headers/next-kernel/include", args)
         self.assertFalse(any("7.1.5" in arg for arg in args))
+
+    def test_bindgen_matches_kbuild_fentry_flags_without_disabling_checks(self):
+        for values, enabled in [({}, False), ({"CONFIG_HAVE_FENTRY": "n"}, False),
+                                ({"CONFIG_HAVE_FENTRY": "y", "CONFIG_FUNCTION_TRACER": "y"}, True)]:
+            args = helper.clang_args(Path("/headers"), values)
+            self.assertEqual("-mfentry" in args, enabled)
+            self.assertEqual("-DCC_USING_FENTRY" in args, enabled)
+            self.assertIn("/headers/include/linux/kconfig.h", args)
+            self.assertFalse(any(arg.startswith("-U") for arg in args))
 
     def test_failed_prerequisites_remove_stale_module_and_layout(self):
         values = {key: "y" for key in ["CONFIG_X86_64", "CONFIG_RUST", "CONFIG_ACPI", "CONFIG_HID", "CONFIG_INPUT", "CONFIG_PM_SLEEP"]}

@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Install a root-owned, production-only source snapshot without unloading APS."""
+import argparse
 import datetime
 import hashlib
 import importlib.util
@@ -27,7 +28,7 @@ FILES = [
 
 
 def verify_installed(release):
-    installed = Path(dkms.run(["modinfo", "-n", "acer_phn16s"]))
+    installed = Path(dkms.run(["modinfo", "-k", release, "-n", "acer_phn16s"]))
     expected = Path(f"/lib/modules/{release}/updates/dkms") / installed.name
     dkms.require(installed == expected, "Module resolution did not select this kernel's DKMS installation")
     built = Path(f"/var/lib/dkms/{dkms.PACKAGE}/{dkms.VERSION}/{release}/x86_64/module") / installed.name
@@ -36,12 +37,12 @@ def verify_installed(release):
                  "Installed module bytes do not match the signed DKMS build")
 
 
-def install():
+def install(release=None):
     dkms.require(os.geteuid() == 0, "Run this installer as root")
     # mkdir(parents=True) applies its mode only to the final directory. Do not
     # inherit a desktop user's 0002 umask for intermediate snapshot directories.
     os.umask(0o022)
-    release = dkms.kernel_name(os.uname().release)
+    release = dkms.kernel_name(release if release is not None else os.uname().release)
     for name, expected in [("product_name", "Predator PHN16S-71"), ("board_name", "FTYPE_ARX"),
                            ("bios_version", "V1.28")]:
         dkms.require(Path(f"/sys/class/dmi/id/{name}").read_text().strip() == expected,
@@ -133,8 +134,11 @@ def install():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--kernel", help="Build/install for these installed headers without booting that kernel")
+    args = parser.parse_args()
     try:
-        install()
+        install(args.kernel)
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         print(f"APS DKMS installation stopped: {error}", file=sys.stderr)
         sys.exit(1)

@@ -10,7 +10,7 @@ import sys
 import tempfile
 
 PACKAGE = "acer-phn16s"
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}
 CACHE = Path("/var/cache/aps-dkms")
 CERT = Path("/var/lib/shim-signed/mok/MOK.der")
@@ -141,14 +141,45 @@ def metadata(release, headers):
     return download_metadata(release, header_version)
 
 
-def clang_args(headers):
+def clang_args(headers, values):
     paths = ["arch/x86/include", "arch/x86/include/generated", "include",
              "arch/x86/include/uapi", "arch/x86/include/generated/uapi",
              "include/uapi", "include/generated/uapi"]
-    return ["-D__KERNEL__", "-DMODULE", "-funsigned-char", "-fno-builtin", "-fms-extensions",
+    # Kbuild supplies both when CONFIG_HAVE_FENTRY is enabled on this x86_64
+    # target. Standalone bindgen must use the same preprocessing environment:
+    # 7.2's HID header include chain now reaches asm/ftrace.h's fentry guard.
+    # Passing the compiler option too checks Clang support, rather than merely
+    # silencing that guard. Keep all PH_FIELD ABI checks and tracer config intact.
+    tracing = ["-mfentry", "-DCC_USING_FENTRY"] if values.get("CONFIG_HAVE_FENTRY") == "y" else []
+    return ["-D__KERNEL__", "-DMODULE", "-funsigned-char", "-fno-builtin", "-fms-extensions", *tracing,
             *[f"-I{headers / path}" for path in paths],
             "-include", str(headers / "include/linux/kconfig.h"),
             "-include", str(headers / "include/linux/compiler_types.h")]
+
+
+def attribute_flags(bindings):
+    """Select typed initializers from the target's own generated Rust schema.
+
+    New kernels wrap legacy/const sysfs callbacks in unions, or structs with
+    CONFIG_CFI. No offsets/casts or kernel-version heuristics are used here;
+    rustc still type-checks the selected fields and callback signatures.
+    """
+    match = re.search(r"pub\s+struct\s+device_attribute\s*\{([^}]+)\}", bindings)
+    require(match, "Target Rust bindings lack device_attribute")
+    fields = set(re.findall(r"pub\s+(\w+)\s*:", match[1]))
+    if fields == {"attr", "show", "store"}:
+        return []
+    require(fields == {"attr", "__bindgen_anon_1", "__bindgen_anon_2"},
+            "Unsupported device_attribute fields in target Rust bindings")
+    kinds = []
+    for index, name in [(1, "show"), (2, "store")]:
+        alternative = re.search(r"pub\s+(union|struct)\s+device_attribute__bindgen_ty_" + str(index)
+                                + r"\s*\{([^}]+)\}", bindings)
+        require(alternative and set(re.findall(r"pub\s+(\w+)\s*:", alternative[2]))
+                == {name, name + "_const"}, "Unsupported sysfs callback alternatives")
+        kinds.append(alternative[1])
+    require(kinds[0] == kinds[1], "Inconsistent sysfs callback alternatives")
+    return ["--cfg", "aps_attr_alternatives"] + (["--cfg", "aps_attr_cfi"] if kinds[0] == "struct" else [])
 
 
 def check_module(module, release, signed=False):
@@ -188,13 +219,14 @@ def build(release):
         require(values.get(name) in ("y", "m"), f"Target kernel lacks {name}")
     rustc = compiler(values)
     rust_dir = metadata(release, headers)
+    attr_flags = attribute_flags(trusted(rust_dir / "bindings/bindings_generated.rs").read_text())
     bindgen = trusted("/usr/bin/bindgen")
     print(f"APS DKMS: kernel={release}; compiler={run([rustc, '--version'])}; metadata={rust_dir}", flush=True)
     with tempfile.TemporaryDirectory(prefix=".abi-", dir=kernel) as temp:
         output = Path(temp) / "hid_layout.rs"
         run([bindgen, kernel / "hid_layout.h", "--formatter", "none", "--use-core", "--allowlist-var", "PH_.*",
              "--no-recursive-allowlist", "--no-layout-tests", "--no-doc-comments",
-             "--output", output, "--", *clang_args(headers)], capture=False)
+             "--output", output, "--", *clang_args(headers, values)], capture=False)
         expected = set(re.findall(r"\bPH_[A-Z0-9_]+\s*=", (kernel / "hid_layout.h").read_text()))
         found = set(re.findall(r"pub\s+const\s+(PH_[A-Z0-9_]+)\s*:", output.read_text()))
         require({value.rstrip(" =\t\n") for value in expected} == found, "Incomplete generated HID layout")
@@ -202,7 +234,7 @@ def build(release):
     print("APS DKMS: regenerated ABI layout sha256=" +
           hashlib.sha256((kernel / "hid_layout.rs").read_bytes()).hexdigest(), flush=True)
     command = ["/usr/bin/make", "-C", headers, f"M={kernel}",
-               f"RUSTC={rustc}", f"RUSTFLAGS_MODULE=-L {rust_dir}",
+               f"RUSTC={rustc}", f"RUSTFLAGS_MODULE=-L {rust_dir} {' '.join(attr_flags)}",
                f"-j{min(os.cpu_count() or 1, 8)}", "modules"]
     cc = values.get("CONFIG_CC_VERSION_TEXT", "").split(" ", 1)[0]
     if re.fullmatch(r"[A-Za-z0-9_.+-]+", cc) and (Path("/usr/bin") / cc).exists():

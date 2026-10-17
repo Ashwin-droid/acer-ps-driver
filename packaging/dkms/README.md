@@ -1,6 +1,6 @@
 # APS DKMS source installation
 
-`acer-phn16s/0.5.1` is the production-only DKMS package. It still targets
+`acer-phn16s/0.5.2` is the production-only DKMS package. It still targets
 Predator PHN16S-71 / FTYPE_ARX / BIOS V1.28. It does not generalize firmware
 commands to other Acer models or enable raw developer probes.
 
@@ -8,10 +8,12 @@ The source installer runs as root:
 
 ```bash
 python3 scripts/install-aps-dkms.py
+# Or prepare a different installed kernel without booting it:
+python3 scripts/install-aps-dkms.py --kernel 7.2.6-76070206-generic
 ```
 
 It copies a fixed manifest of driver sources, shared parsers, and the two HID
-descriptor fixtures to `/usr/src/acer-phn16s-0.5.1`. Files there are root-owned
+descriptor fixtures to `/usr/src/acer-phn16s-0.5.2`. Files there are root-owned
 and not group/other-writable. It does not symlink the source to this workspace,
 ship signing keys, or use compilers under a user's home directory.
 
@@ -20,6 +22,21 @@ protected. After validating the built module's signer and vermagic, it explicitl
 replaces this module and compares the installed compressed bytes with the DKMS
 build. This matters because Rust submodule edits can leave `srcversion` unchanged;
 DKMS can otherwise skip the binary copy while reporting the new version installed.
+
+0.5.2 fixes the tested 7.2.6 upgrade in two places. Standalone bindgen mirrors
+Kbuild's fentry compiler option/define when the target config advertises it;
+tracing and ABI assertions are not disabled. The builder also inspects the
+target Rust metadata's `device_attribute` schema to select plain callback fields
+or the newer anonymous callback alternatives. Rust still checks the exact field
+types and callback signatures. Unknown layouts fail closed rather than falling
+back to raw offsets or a kernel-version guess. Plain and union layouts were
+built against the local 7.1.5 and 7.2.6 headers respectively; the CFI struct
+selection has unit coverage but has not been built against a CFI-enabled kernel.
+
+The installer checks module resolution and installed bytes for the selected
+kernel, not necessarily the running one. It never unloads/reloads the running
+module or reboots. Successful build/sign/install for a new kernel still needs
+runtime verification after the user boots that kernel.
 
 Prerequisites are DKMS, the target kernel's headers with Rust enabled, its exact
 distribution Rust compiler, bindgen/libclang, and the existing enrolled Ashwin

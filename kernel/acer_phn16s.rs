@@ -96,8 +96,22 @@ const fn attr(name: &'static CStr, writable: bool) -> Attribute {
             name: name.as_ptr().cast(),
             mode: if writable { 0o660 } else { 0o440 },
         },
+        #[cfg(not(aps_attr_alternatives))]
         show: Some(show),
+        #[cfg(not(aps_attr_alternatives))]
         store: if writable { Some(store) } else { None },
+        #[cfg(aps_attr_alternatives)]
+        __bindgen_anon_1: bindings::device_attribute__bindgen_ty_1 {
+            show: Some(show),
+            #[cfg(aps_attr_cfi)]
+            show_const: None,
+        },
+        #[cfg(aps_attr_alternatives)]
+        __bindgen_anon_2: bindings::device_attribute__bindgen_ty_2 {
+            store: if writable { Some(store) } else { None },
+            #[cfg(aps_attr_cfi)]
+            store_const: None,
+        },
     })
 }
 const fn root_control(name: &'static CStr) -> Attribute {
