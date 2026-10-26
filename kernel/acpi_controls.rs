@@ -44,7 +44,15 @@ fn execute(request: Request) -> Result<u64> {
 
 fn firmware_buffer(method:u64,payload:&[u8],output_len:usize)->Result<[u8;8]> {
     if !matches!(payload.len(),4|8) || !matches!(output_len,4|8) { return Err(EINVAL); }
-    let mut input=[0u8;8];
+    let reply = firmware_buffer_at(c"\\_SB.PC00.WMID.WMBH", method, payload, output_len)?;
+    let mut result = [0; 8];
+    result.copy_from_slice(&reply[..8]);
+    Ok(result)
+}
+
+fn firmware_buffer_at(path: &CStr, method:u64,payload:&[u8],output_len:usize)->Result<[u8;16]> {
+    if payload.is_empty() || payload.len()>24 || !matches!(output_len,4|8|16) { return Err(EINVAL); }
+    let mut input=[0u8;24];
     input[..payload.len()].copy_from_slice(payload);
     // SAFETY: Zeroed union storage is valid; every active variant is initialized below.
     let mut args: [bindings::acpi_object; 3] = unsafe { core::mem::zeroed() };
@@ -71,7 +79,7 @@ fn firmware_buffer(method:u64,payload:&[u8],output_len:usize)->Result<[u8;8]> {
     let status = unsafe {
         bindings::acpi_evaluate_object(
             core::ptr::null_mut(),
-            c"\\_SB.PC00.WMID.WMBH".as_char_ptr().cast_mut(),
+            path.as_char_ptr().cast_mut(),
             &mut list,
             &mut output,
         )
@@ -92,14 +100,52 @@ fn firmware_buffer(method:u64,payload:&[u8],output_len:usize)->Result<[u8;8]> {
         if buffer.length as usize != output_len || buffer.pointer.is_null() {
             return Err(EIO);
         }
-        let mut bytes = [0u8; 8];
-        // SAFETY: ACPICA's returned buffer has exactly 4 or 8 bytes from the fixed operation table.
+        let mut bytes = [0u8; 16];
+        // SAFETY: ACPICA's buffer has exactly the bounded size requested by a fixed caller.
         bytes[..output_len]
             .copy_from_slice(unsafe { core::slice::from_raw_parts(buffer.pointer, output_len) });
         Ok(bytes)
     })();
     // SAFETY: Output is NULL or ACPICA's kernel allocation, released exactly once.
     unsafe { bindings::kfree(output.pointer) };
+    result
+}
+
+pub(crate) fn battery_status() -> Result<crate::charge_policy::Status> {
+    let reply=firmware_buffer_at(c"\\_SB.PC00.WMID.WMBE", crate::charge_policy::GET,
+        &crate::charge_policy::QUERY, 8)?;
+    crate::charge_policy::Status::decode(&reply[..8]).ok_or(EIO)
+}
+fn battery_write(op: crate::charge_policy::Operation) -> Result<()> {
+    let reply=firmware_buffer_at(c"\\_SB.PC00.WMID.WMBE", crate::charge_policy::SET, &op.packet(), 4)?;
+    unsafe { bindings::msleep(30) };
+    if reply[..4] != [0;4] { return Err(EIO); }
+    Ok(())
+}
+pub(crate) fn set_battery(op: crate::charge_policy::Operation) -> Result<()> {
+    use crate::charge_policy::Operation;
+    let before=battery_status()?;
+    if !before.supported(op) { return Err(Error::from_errno(-(bindings::EOPNOTSUPP as i32))); }
+    if before.value(op)==op.enabled() { return Ok(()); }
+    if before.conflict(op, crate::turbo_button::on_ac()) { return Err(EBUSY); }
+    let result=battery_write(op).and_then(|_| {
+        let after=battery_status()?;
+        let other_unchanged=match op {
+            Operation::Limit(_) => after.calibrating==before.calibrating && after.adaptive==before.adaptive,
+            Operation::Calibration(_) => after.limited==before.limited && after.adaptive==before.adaptive,
+        };
+        if after.capabilities!=before.capabilities || after.value(op)!=op.enabled() || !other_unchanged { return Err(EIO); }
+        Ok(())
+    });
+    if result.is_err() {
+        // Restore a failed limit change. Never retry/restart calibration after
+        // an ambiguous result: only request its cancellation.
+        let recovery=match op { Operation::Limit(_) => Operation::Limit(before.limited),
+            Operation::Calibration(_) => Operation::Calibration(false) };
+        if let Err(error)=battery_write(recovery) {
+            pr_err!("acer_phn16s: battery recovery request failed: {}\n",error.to_errno());
+        }
+    }
     result
 }
 

@@ -13,6 +13,8 @@ use kernel::{
     sync::Mutex,
 };
 mod acpi_controls;
+#[path = "../src/charge_policy.rs"]
+mod charge_policy;
 #[path = "../src/control.rs"]
 mod control;
 #[path = "../src/interface.rs"]
@@ -120,6 +122,9 @@ const fn root_control(name: &'static CStr) -> Attribute {
     attribute
 }
 static ATTRS: &[Attribute] = &[
+    attr(c"battery_capabilities", false),
+    root_control(c"battery_charge_limit"),
+    root_control(c"battery_calibration"),
     attr(c"cpu_fan_rpm", false),
     attr(c"gpu_fan_rpm", false),
     attr(c"performance_mode", true),
@@ -184,6 +189,22 @@ fn profile_name(value: u64) -> Result<&'static str> {
 }
 
 fn read_control(name: &[u8], state: &State, out: &mut Output) -> Result<()> {
+    if matches!(name,b"battery_capabilities"|b"battery_charge_limit"|b"battery_calibration") {
+        if state.sleep.sleeping { return Err(EBUSY); }
+        let status=acpi_controls::battery_status()?;
+        return match name {
+            b"battery_capabilities" => writeln!(out,"limit_80={} calibration={} adaptive={}",
+                status.capabilities & 1 != 0,status.capabilities & 2 != 0,status.capabilities & 4 != 0),
+            b"battery_charge_limit" => {
+                if status.capabilities & 1 == 0 { return Err(Error::from_errno(-(bindings::EOPNOTSUPP as i32))); }
+                writeln!(out,"{}",if status.limited {80} else {100})
+            }
+            _ => {
+                if status.capabilities & 2 == 0 { return Err(Error::from_errno(-(bindings::EOPNOTSUPP as i32))); }
+                writeln!(out,"{}",if status.calibrating {"on"} else {"off"})
+            }
+        }.map_err(|_| EOVERFLOW);
+    }
     if name == b"work_status" {
         let (runs, timer_runs) = events::counters();
         return writeln!(out, "runs={} timer_runs={}", runs, timer_runs).map_err(|_| EOVERFLOW);
@@ -286,6 +307,11 @@ fn read_control(name: &[u8], state: &State, out: &mut Output) -> Result<()> {
 fn write_control(name: &[u8], input: &[u8], state: &mut State) -> Result<()> {
     // Parsers reject unsupported, malformed and out-of-range requests before any hardware I/O.
     match name {
+        b"battery_charge_limit" | b"battery_calibration" => {
+            let name=core::str::from_utf8(name).map_err(|_| EINVAL)?;
+            let setting=charge_policy::Operation::parse(name,input).ok_or(EINVAL)?;
+            acpi_controls::set_battery(setting)
+        }
         b"sleep_cover_lighting" => {
             // Configuration only: never touch the awake logo or its cache.
             state.sleep_logo = interface::Cover::parse(input).ok_or(EINVAL)?;
@@ -430,7 +456,7 @@ unsafe extern "C" fn store(
         // Enforce administrative privilege independently of sysfs modes, ACLs,
         // or a writable fd passed from root. capable() checks the initial user
         // namespace, so container/user-namespace root is not sufficient.
-        if matches!(name.to_bytes(), b"gpu_mux_mode" | b"boot_effects")
+        if matches!(name.to_bytes(), b"gpu_mux_mode" | b"boot_effects" | b"battery_charge_limit" | b"battery_calibration")
             && !unsafe { bindings::capable(bindings::CAP_SYS_ADMIN as i32) } {
             return Err(EPERM);
         }
@@ -452,7 +478,7 @@ unsafe extern "C" fn store(
         result?;
         // Boot GPU selection belongs to firmware, never the lighting/profile
         // preference file. Do not cause aps-state to capture/replay it.
-        if !matches!(name.to_bytes(), b"gpu_mux_mode" | b"boot_effects") {
+        if !matches!(name.to_bytes(), b"gpu_mux_mode" | b"boot_effects" | b"battery_charge_limit" | b"battery_calibration") {
             state.generation = state.generation.wrapping_add(1);
         }
         Ok(count as isize)

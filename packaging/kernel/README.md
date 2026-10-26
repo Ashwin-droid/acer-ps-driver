@@ -27,6 +27,18 @@ The account's primary group receives access to these attributes under
   cover_lighting, sleep_cover_lighting.
 - User read / root write: gpu_mux_mode, mode 0640 with an additional kernel CAP_SYS_ADMIN check.
 - User read / root write: boot_effects, the startup effects master switch, not the separate BIOS sound mute setting.
+- Read: battery_capabilities. Root-only writes: battery_charge_limit (80/100),
+  battery_calibration (on/off). The same CAP_SYS_ADMIN gate applies independently
+  of mode 0640 and root-opened descriptors. Readback queries firmware directly.
+
+Charging uses fixed BatteryControl WMBE methods 0x14/0x15 and battery index 1.
+Capability flags gate both setters. Calibration start requires AC, limit 100,
+and inactive adaptive charging; limit changes are blocked during calibration.
+Invalid requests fail before firmware I/O. A failed limit change requests rollback;
+an ambiguous calibration write requests cancellation, never a retry/restart.
+The foreground userspace calibration command handles sleep inhibition and AC
+monitoring. No kernel polling, charge timers, automatic startup or disk persistence
+is added. Calibration is protocol-traced but has not been physically run here.
 
 Attributes are root-owned, mode 0440 for reads and 0660 for ordinary controls.
 MUX is the exception: mode 0640 at creation and after the boot/udev permission

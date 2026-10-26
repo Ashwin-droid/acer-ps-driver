@@ -21,7 +21,7 @@ FILES = [
     "kernel/sleep.rs", "kernel/turbo_button.rs", "src/control.rs", "src/protocol.rs",
     "src/boot_policy.rs", "src/mux.rs", "src/lid_state.rs", "src/sleep_state.rs",
     "src/logo_recovery.rs",
-    "src/interface.rs", "src/event_policy.rs", "kernel/events.rs",
+    "src/interface.rs", "src/event_policy.rs", "src/charge_policy.rs", "kernel/events.rs",
     "research/firmware/acer-ec-hid-descriptor.bin", "research/firmware/enek5130-descriptor.bin",
     "packaging/dkms/aps_dkms.py", "packaging/dkms/check-install",
 ]

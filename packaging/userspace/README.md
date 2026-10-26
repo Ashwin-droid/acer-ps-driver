@@ -1,5 +1,15 @@
 # APS userspace bundle
 
+Battery charging: `aps battery status|capabilities`, `aps battery limit 80|100`,
+and `aps battery calibration status|stop|start --confirm`. Writes request Polkit.
+The 80/100 toggle has firmware readback verification; an actual recharge cutoff
+and full calibration cycle have not been tested. Calibration requires AC and
+limit 100, runs in the foreground under systemd-inhibit, and requests cancellation
+on interruption or AC loss. A killed/crashed client may leave firmware calibration
+active; use the stop command. No battery settings are saved/restored by aps-state.
+Adaptive charging, arbitrary thresholds, fast charging and USB power-off charging
+are not presented as supported native battery controls on this machine.
+
 System Boot Effect: `aps boot status`, `aps boot effects on|off`, and
 `aps boot logo pick [DIRECTORY] | set FILE | prepare FILE OUTPUT | status | reset`.
 The picker previews highlighted/hovered images and videos in a Ratatui-image pane

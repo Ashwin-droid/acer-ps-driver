@@ -233,6 +233,51 @@ The keyboard timeout is a real firmware setting: 30 seconds when on, 0 when off.
 The kernel preserves brightness and verifies both values. Software-generated
 lighting traffic may interact with idle-timeout behavior.
 
+## Battery charging
+
+```bash
+aps battery status
+aps battery capabilities
+aps battery limit 80
+aps battery limit 100
+aps battery calibration status
+aps battery calibration stop
+# Deliberately cycles the battery; can take hours. Read the warning below first:
+aps battery calibration start --confirm
+```
+
+The validated PHN16S-71 firmware advertises the fixed 80% limiter and calibration,
+not adaptive charging. Screenshots from this laptop's Windows PredatorSense show
+Optimized and Full Battery Charging, with no AI/adaptive option visible.
+`80` enables Acer Optimized Battery Charging; `100` disables
+that cap. It does not actively discharge an already-full battery. Both settings
+were accepted and read back through the native BatteryControl WMI interface;
+the actual recharge cutoff has not yet been physically observed. Battery status,
+capacity, cycle count and energy health information use Linux's existing BAT1
+telemetry rather than adding redundant kernel getters.
+
+Battery reads are unprivileged. Writes require root/Polkit and an independent
+kernel CAP_SYS_ADMIN check. The fields read firmware state, never a cached guess.
+These controls work with the lid closed and are not replayed from the user
+preference file. Reboot persistence has not been verified.
+
+Calibration is a native firmware operation, **not end-to-end hardware-tested**
+here. It deliberately discharges/recharges and can take hours. The kernel requires
+AC, limit 100 and no adaptive charging before starting. The explicit foreground
+CLI acquires a sleep inhibitor and a root-owned runtime session lock, monitors AC,
+and requests cancellation on Ctrl-C, SIGTERM, SIGHUP or AC loss. It does not change
+the performance profile or silently turn off the 80% cap. If the process is killed
+or the machine fails, firmware calibration may continue; use the stop command.
+Root-level direct sysfs callers must arrange their own sleep inhibition. An Off
+readback alone does not distinguish successful completion from an aborted cycle.
+Calibration is never started automatically, tested during installation, or restored
+from disk. No calibration or forced discharge was initiated while adding this.
+
+Arbitrary thresholds are not exposed: the newer HID boundary getter returned
+unusable FF fields on this machine. Fast charging has no verified control path.
+USB power-off charging is a separate feature, not the battery's 80% cap, and is
+unchanged. See `research/CHARGE-CONTROLS.md` for provenance and test limitations.
+
 ## System boot effects and custom logo
 
 ```bash
@@ -465,6 +510,9 @@ All attributes are under /sys/class/misc/acer-phn16s/.
 | gpu_mux_mode | User read / root write | Firmware-reported mode; write optimus, nvidia or auto; restart required |
 | gpu_mux_request | Read | Last APS request/result since module load, not active display routing |
 | boot_effects | User read / root write | Firmware readback and writes: on or off |
+| battery_capabilities | Read | Firmware flags: limit_80, calibration, adaptive |
+| battery_charge_limit | User read / root write | Firmware readback and writes: 80 or 100 |
+| battery_calibration | User read / root write | Firmware active flag and writes: on or off; on deliberately starts a cycle |
 | preferences_generation | Read | Change counter, not a writable control |
 | work_status | Read | Event-work and one-shot deadline execution counters; reads do not schedule work |
 
@@ -530,10 +578,12 @@ The kernel is the trust boundary, regardless of which program opens sysfs:
   deliberately bypassing the normal firmware command/value allow-list.
 - Only fixed F14/F15 events are synthesized from the two filtered physical keys.
   Userspace cannot submit keys or trigger a fake press.
-- No display/overdrive, battery or unrelated controls are implemented.
+- No display/overdrive or arbitrary charge voltage/current controls are implemented.
 - Hardware requests and state are serialized inside the kernel. HID references
   and device locks protect unplug/unbind; buffers are kernel allocated.
-- The CLI has no unsafe blocks or hardware FFI. It is independently compiled.
+- The CLI is independently compiled and accesses hardware only through typed
+  sysfs controls. Its battery commands use small libc calls for effective UID
+  checks and signal handlers; they cannot bypass the kernel's validation.
 - Read-only attributes are 0440; controls are 0660, root-owned with the configured
   user's primary group. Raw HID devices retain root-only access.
 

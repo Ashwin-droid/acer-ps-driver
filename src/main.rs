@@ -1,7 +1,9 @@
+mod battery;
 mod boot;
 mod boot_media;
 mod boot_picker;
 mod boot_policy;
+mod charge_policy;
 mod control;
 mod gpu;
 mod interface;
@@ -179,6 +181,9 @@ Quick examples:
 
 Commands:
 aps status
+aps battery status|capabilities
+aps battery limit 80|100
+aps battery calibration status|stop|start --confirm
 aps profile quiet|balanced|performance|turbo|eco
 aps fans auto
 aps fans maximum
@@ -224,6 +229,7 @@ fn topic_help(topic: &str) {
         "boot" => boot::help(),
         "gpu" => gpu::help(),
         "logo" => logo::help(),
+        "battery" => battery::help(),
         "sleep" => sleep::help(),
         "turbo-led" => println!("Turbo / mode-key RGB LED\n\n  aps turbo-led status\n  aps turbo-led auto\n  aps turbo-led manual FF0088\n  aps turbo-led FF0088\n  aps turbo-led manual\n  aps turbo-led off\n\nAuto follows the operating mode in firmware. A hex color selects Manual.\nManual without a color restores the saved manual color (white without saved state).\nOnly an advertised Turbo/Mode-key LED target is touched."),
         "button" => println!("Turbo button\n\n  aps button status\n  aps button mode \"power modes\"\n  aps button mode hotkey\n\nPower modes: Quiet -> Balanced -> Performance -> Turbo -> Eco.\nOn battery, Performance/Turbo are skipped. Hotkey emits F14 press/release.\nThe user-account preference service restores this setting after reboot.\nPredatorSense always emits F15. Press counters reset on module reload."),
@@ -351,6 +357,7 @@ fn run() -> Result<()> {
         Some("button") => button(&args[1..]),
         Some("turbo-led") => turbo_led(&args[1..]),
         Some("logo") => logo::run(&args[1..]),
+        Some("battery") => battery::run(&args[1..]),
         Some("sleep") => sleep::run(&args[1..]),
         Some("gpu") => gpu::run(&args[1..]),
         Some("boot") => boot::run(&args[1..]),

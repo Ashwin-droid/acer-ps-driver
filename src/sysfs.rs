@@ -5,6 +5,9 @@ fn path(name: &str) -> Result<PathBuf> {
     if !matches!(
         name,
         "cpu_fan_rpm"
+            | "battery_capabilities"
+            | "battery_charge_limit"
+            | "battery_calibration"
             | "gpu_fan_rpm"
             | "profile"
             | "fan_control"
@@ -50,6 +53,14 @@ pub(super) fn write(name: &str, text: &str) -> Result<()> {
 }
 
 fn write_error(name: &str, error: &std::io::Error) -> String {
+    if matches!(name, "battery_charge_limit" | "battery_calibration") {
+        if matches!(error.raw_os_error(), Some(1 | 13)) {
+            return "Battery changes require root. Use aps battery for Polkit authorization or run with sudo.".into();
+        }
+        if error.raw_os_error() == Some(16) {
+            return "Battery operation blocked: calibration needs AC, limit 100 and no adaptive charging; stop calibration before changing the limit. Writes are also blocked during suspend.".into();
+        }
+    }
     if name == "mux_mode" {
         if matches!(error.raw_os_error(), Some(1 | 13)) {
             return crate::gpu::ROOT_REQUIRED.into();

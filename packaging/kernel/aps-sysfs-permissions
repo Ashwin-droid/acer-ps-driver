@@ -8,7 +8,7 @@ for attempt in {1..80}; do
     [[ -f "$base/preferences_generation" ]] && break
     sleep 0.025
 done
-for name in dev_mode dev_challenge dev_probe sleep_status lid_state lid_status work_status gpu_mux_request; do
+for name in dev_mode dev_challenge dev_probe sleep_status lid_state lid_status work_status gpu_mux_request battery_capabilities; do
     if [[ -f "$base/$name" ]]; then
         chown "root:$access_group" "$base/$name"
         if [[ "$name" == dev_probe ]]; then chmod 0660 "$base/$name"; else chmod 0440 "$base/$name"; fi
@@ -26,3 +26,7 @@ chown "root:$access_group" "$base/gpu_mux_mode"
 chmod 0640 "$base/gpu_mux_mode"
 chown "root:$access_group" "$base/boot_effects"
 chmod 0640 "$base/boot_effects"
+for name in battery_charge_limit battery_calibration; do
+    chown "root:$access_group" "$base/$name"
+    chmod 0640 "$base/$name"
+done

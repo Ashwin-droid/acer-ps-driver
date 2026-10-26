@@ -949,6 +949,8 @@ mod tests {
         assert_eq!(Snapshot::parse(&state.text()).unwrap(), state);
         for invalid in [
             "APS-USERSPACE-STATE-1\nprofile=eco; reboot\n",
+            "APS-USERSPACE-STATE-1\nbattery_charge_limit=80\n",
+            "APS-USERSPACE-STATE-1\nbattery_calibration=on\n",
             "APS-USERSPACE-STATE-1\n/etc/passwd=x\n",
             "APS-USERSPACE-STATE-1\nprofile=eco\nprofile=quiet\n",
             "APS-USERSPACE-STATE-1\nbutton_mode=hotkey F16\n",
